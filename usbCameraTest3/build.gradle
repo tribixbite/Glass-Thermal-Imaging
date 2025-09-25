@@ -55,7 +55,7 @@ android {
 }
 
 dependencies {
-    // Simplified dependencies for Glass proof-of-concept
-    // Remove complex UVC dependencies for initial build
-    // implementation project(':usbCameraCommon')
+    // Restore UVC camera dependencies for full functionality
+    implementation project(':usbCameraCommon')
+    implementation project(':libuvccamera')
 }
