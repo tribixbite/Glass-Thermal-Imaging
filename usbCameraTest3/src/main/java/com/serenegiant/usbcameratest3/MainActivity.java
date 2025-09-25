@@ -54,6 +54,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity implements CameraDialog.CameraDialogParent {
     private static final String TAG = "MainActivity";
@@ -70,9 +72,11 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
     private static final int THERMAL_MAX_TEMP = 400; // Celsius
 
     // Raw thermal data processing
-    private volatile ByteBuffer mLatestThermalFrame = null;
+    private volatile byte[] mLatestThermalFrame = null;
     private final Object mThermalLock = new Object();
     private boolean mRawDataEnabled = false;
+    private int mThermalFrameWidth = 640;
+    private int mThermalFrameHeight = 512;
 
     private final Object mSync = new Object();
 
@@ -94,6 +98,9 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
     private static final int GESTURE_TWO_FINGER_TAP = 2;
     private static final int GESTURE_SWIPE_DOWN = 3;
 
+    // Background processing
+    private ExecutorService mThermalProcessingExecutor;
+
     @Override
     protected void onCreate(final Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -112,6 +119,9 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
 
         // Create capture directory
         createCaptureDirectory();
+
+        // Initialize background processing
+        mThermalProcessingExecutor = Executors.newSingleThreadExecutor();
     }
 
     private void initializeGlassUI() {
@@ -215,6 +225,10 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
             mUSBMonitor.destroy();
             mUSBMonitor = null;
         }
+        if (mThermalProcessingExecutor != null) {
+            mThermalProcessingExecutor.shutdown();
+            mThermalProcessingExecutor = null;
+        }
         super.onDestroy();
     }
 
@@ -250,19 +264,19 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
 
             try {
                 // FLIR Boson Y16 format: 16-bit values, little endian
-                // For 640x512 Boson, center pixel is at (320, 256)
-                // For 320x256 Boson, center pixel is at (160, 128)
-                int width = 640; // Assume Boson 640 for now
-                int height = 512;
+                // Use actual frame dimensions
+                int width = mThermalFrameWidth;
+                int height = mThermalFrameHeight;
                 int centerX = width / 2;
                 int centerY = height / 2;
 
                 // Each pixel is 2 bytes (16-bit)
                 int pixelOffset = (centerY * width + centerX) * 2;
 
-                if (pixelOffset + 1 < mLatestThermalFrame.capacity()) {
-                    // Read 16-bit value (little endian)
-                    short rawValue = mLatestThermalFrame.getShort(pixelOffset);
+                if (pixelOffset + 1 < mLatestThermalFrame.length) {
+                    // Read 16-bit value (little endian) from byte array
+                    short rawValue = (short) ((mLatestThermalFrame[pixelOffset] & 0xFF) |
+                                             ((mLatestThermalFrame[pixelOffset + 1] & 0xFF) << 8));
 
                     // Improved temperature estimation assuming T-Linear format
                     // T-Linear format: raw value is proportional to absolute temperature
@@ -302,7 +316,7 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                 updateStatusText(status);
 
                 if (mThermalMode) {
-                    generateThermalOverlay();
+                    generateThermalOverlayAsync();
                 } else {
                     mThermalOverlay.setVisibility(View.GONE);
                 }
@@ -321,7 +335,13 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                         @Override
                         public void onFrame(ByteBuffer frame) {
                             synchronized (mThermalLock) {
-                                mLatestThermalFrame = frame;
+                                // Copy buffer data to prevent race conditions
+                                int frameSize = frame.remaining();
+                                if (mLatestThermalFrame == null || mLatestThermalFrame.length != frameSize) {
+                                    mLatestThermalFrame = new byte[frameSize];
+                                }
+                                frame.get(mLatestThermalFrame);
+                                frame.rewind(); // Reset position for potential reuse
                                 mRawDataEnabled = true;
                             }
                         }
@@ -361,63 +381,107 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         }
     }
 
-    private void generateThermalOverlay() {
+    private void generateThermalOverlayAsync() {
+        if (mThermalProcessingExecutor == null || mThermalProcessingExecutor.isShutdown()) {
+            return;
+        }
+
+        // Copy thermal data for background processing to avoid race conditions
+        final byte[] thermalDataCopy;
+        final int width, height, palette;
+
         synchronized (mThermalLock) {
             if (mLatestThermalFrame == null || !mRawDataEnabled) {
                 return;
             }
 
-            // Create thermal visualization bitmap
-            Bitmap thermalBitmap = createThermalBitmap(mLatestThermalFrame);
-            if (thermalBitmap != null) {
-                // Draw center reticle
-                Canvas canvas = new Canvas(thermalBitmap);
-                Paint paint = new Paint();
-                paint.setColor(Color.WHITE);
-                paint.setStrokeWidth(2.0f);
-                paint.setAntiAlias(true);
-
-                int centerX = thermalBitmap.getWidth() / 2;
-                int centerY = thermalBitmap.getHeight() / 2;
-                int crossSize = 20;
-
-                // Draw crosshair
-                canvas.drawLine(centerX - crossSize, centerY, centerX + crossSize, centerY, paint);
-                canvas.drawLine(centerX, centerY - crossSize, centerX, centerY + crossSize, paint);
-
-                mThermalOverlay.setImageBitmap(thermalBitmap);
-                mThermalOverlay.setVisibility(View.VISIBLE);
-            }
+            thermalDataCopy = mLatestThermalFrame.clone();
+            width = mThermalFrameWidth;
+            height = mThermalFrameHeight;
+            palette = mThermalPalette;
         }
+
+        // Process thermal data in background thread
+        mThermalProcessingExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    // Create thermal visualization bitmap with auto-contrast
+                    Bitmap thermalBitmap = createThermalBitmapWithAutoContrast(thermalDataCopy, width, height, palette);
+
+                    if (thermalBitmap != null) {
+                        // Draw center reticle
+                        Canvas canvas = new Canvas(thermalBitmap);
+                        Paint paint = new Paint();
+                        paint.setColor(Color.WHITE);
+                        paint.setStrokeWidth(2.0f);
+                        paint.setAntiAlias(true);
+
+                        int centerX = thermalBitmap.getWidth() / 2;
+                        int centerY = thermalBitmap.getHeight() / 2;
+                        int crossSize = 20;
+
+                        // Draw crosshair
+                        canvas.drawLine(centerX - crossSize, centerY, centerX + crossSize, centerY, paint);
+                        canvas.drawLine(centerX, centerY - crossSize, centerX, centerY + crossSize, paint);
+
+                        // Update UI on main thread
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (mThermalMode) { // Check if still in thermal mode
+                                    mThermalOverlay.setImageBitmap(thermalBitmap);
+                                    mThermalOverlay.setVisibility(View.VISIBLE);
+                                }
+                            }
+                        });
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error generating thermal overlay", e);
+                }
+            }
+        });
     }
 
-    private Bitmap createThermalBitmap(ByteBuffer thermalData) {
+    private Bitmap createThermalBitmapWithAutoContrast(byte[] thermalData, int width, int height, int palette) {
         try {
-            // Thermal image dimensions - adjust based on camera model
-            int width = 640; // Boson 640
-            int height = 512;
-
-            if (thermalData.capacity() < width * height * 2) {
-                // Try smaller resolution
-                width = 320; // Boson 320
-                height = 256;
-            }
-
-            if (thermalData.capacity() < width * height * 2) {
-                Log.e(TAG, "Thermal data buffer too small");
+            int expectedSize = width * height * 2; // 2 bytes per pixel for Y16
+            if (thermalData.length < expectedSize) {
+                Log.e(TAG, "Thermal data buffer too small: " + thermalData.length + " < " + expectedSize);
                 return null;
             }
 
-            Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-            int[] pixels = new int[width * height];
+            // First pass: find min/max values for auto-contrast
+            int minValue = Integer.MAX_VALUE;
+            int maxValue = Integer.MIN_VALUE;
+            int pixelCount = width * height;
 
-            for (int i = 0; i < pixels.length; i++) {
-                // Read 16-bit thermal value
-                short rawValue = thermalData.getShort(i * 2);
-                int thermalValue = rawValue & 0xFFFF;
+            for (int i = 0; i < pixelCount; i++) {
+                int offset = i * 2;
+                // Read 16-bit value (little endian) from byte array
+                int rawValue = (thermalData[offset] & 0xFF) | ((thermalData[offset + 1] & 0xFF) << 8);
+                minValue = Math.min(minValue, rawValue);
+                maxValue = Math.max(maxValue, rawValue);
+            }
+
+            // Avoid division by zero
+            int range = Math.max(maxValue - minValue, 1);
+
+            // Create bitmap with auto-scaled values
+            Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            int[] pixels = new int[pixelCount];
+
+            for (int i = 0; i < pixelCount; i++) {
+                int offset = i * 2;
+                // Read 16-bit value (little endian) from byte array
+                int rawValue = (thermalData[offset] & 0xFF) | ((thermalData[offset + 1] & 0xFF) << 8);
+
+                // Auto-contrast: scale to 0-255 based on scene range
+                int scaledValue = ((rawValue - minValue) * 255) / range;
+                scaledValue = Math.max(0, Math.min(255, scaledValue));
 
                 // Apply thermal color palette
-                int color = applyThermalPalette(thermalValue, mThermalPalette);
+                int color = applyThermalPaletteScaled(scaledValue, palette);
                 pixels[i] = color;
             }
 
@@ -429,20 +493,36 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         }
     }
 
+    // Legacy method for backward compatibility - now uses new method
+    private Bitmap createThermalBitmap(ByteBuffer thermalData) {
+        // Convert ByteBuffer to byte array and use new method
+        synchronized (mThermalLock) {
+            byte[] dataArray = new byte[thermalData.remaining()];
+            thermalData.get(dataArray);
+            thermalData.rewind();
+            return createThermalBitmapWithAutoContrast(dataArray, mThermalFrameWidth, mThermalFrameHeight, mThermalPalette);
+        }
+    }
+
+    private int applyThermalPaletteScaled(int scaledValue, int palette) {
+        // Value is already scaled to 0-255 by auto-contrast
+        switch (palette) {
+            case 0: // Iron palette
+                return applyIronPalette(scaledValue);
+            case 1: // Rainbow palette
+                return applyRainbowPalette(scaledValue);
+            case 2: // Grayscale palette
+                return Color.argb(255, scaledValue, scaledValue, scaledValue);
+            default:
+                return Color.argb(255, scaledValue, scaledValue, scaledValue);
+        }
+    }
+
+    // Legacy method for backward compatibility
     private int applyThermalPalette(int thermalValue, int palette) {
         // Normalize thermal value (0-65535) to 0-255
         int normalized = (thermalValue * 255) / 65535;
-
-        switch (palette) {
-            case 0: // Iron palette
-                return applyIronPalette(normalized);
-            case 1: // Rainbow palette
-                return applyRainbowPalette(normalized);
-            case 2: // Grayscale palette
-                return Color.argb(255, normalized, normalized, normalized);
-            default:
-                return Color.argb(255, normalized, normalized, normalized);
-        }
+        return applyThermalPaletteScaled(normalized, palette);
     }
 
     private int applyIronPalette(int value) {
@@ -541,10 +621,9 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                 File rawFile = new File(dir, rawFilename);
 
                 FileOutputStream out = new FileOutputStream(rawFile);
-                byte[] thermalBytes = new byte[mLatestThermalFrame.remaining()];
-                mLatestThermalFrame.get(thermalBytes);
-                out.write(thermalBytes);
+                out.write(mLatestThermalFrame); // mLatestThermalFrame is now byte[]
                 out.close();
+                int thermalDataSize = mLatestThermalFrame.length;
 
                 // Save metadata
                 String metaFilename = baseFilename + "_meta.txt";
@@ -562,7 +641,7 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                     mThermalMode ? "Enabled" : "Disabled",
                     getPaletteName(),
                     readCenterTemperatureFromThermalData(),
-                    thermalBytes.length
+                    thermalDataSize
                 );
 
                 metaOut.write(metadata.getBytes());
@@ -615,6 +694,21 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                         mUVCCameraView.onResume();
                         mPreviewSurface = mUVCCameraView.getSurface();
                         mUVCCamera.setPreviewSize(GLASS_WIDTH, GLASS_HEIGHT);
+
+                        // Store actual thermal frame dimensions for processing
+                        // These may be different from display dimensions
+                        synchronized (mThermalLock) {
+                            // Check actual supported sizes to determine thermal frame dimensions
+                            String sizeList = mUVCCamera.getSupportedSizeList();
+                            if (sizeList != null && sizeList.contains("320x256")) {
+                                mThermalFrameWidth = 320;
+                                mThermalFrameHeight = 256;
+                            } else {
+                                mThermalFrameWidth = 640;
+                                mThermalFrameHeight = 512;
+                            }
+                        }
+
                         mUVCCamera.setPreviewDisplay(mPreviewSurface);
                         mUVCCamera.startPreview();
                     }
