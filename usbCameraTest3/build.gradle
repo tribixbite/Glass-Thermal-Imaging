@@ -26,6 +26,7 @@ apply plugin: 'com.android.application'
 android {
 	compileSdkVersion versionCompiler
 	buildToolsVersion versionBuildTool
+	namespace 'com.flir.boson.glass'  // Required for modern AGP
 
 	compileOptions {
 		sourceCompatibility javaSourceCompatibility
@@ -33,11 +34,16 @@ android {
 	}
 
     defaultConfig {
-        applicationId "com.serenegiant.usbcameratest3"
-        minSdkVersion 18
-		targetSdkVersion versionTarget
-		versionCode 8
-		versionName "3.00"
+        applicationId "com.flir.boson.glass"
+        minSdkVersion versionMinimum  // Glass requires API 19
+		targetSdkVersion versionTarget // Glass XE24 API 19
+		versionCode 1
+		versionName versionNameString
+
+		// Glass-specific features
+        manifestPlaceholders = [
+            glassUsbHost: 'true'
+        ]
     }
 
     buildTypes {
@@ -49,5 +55,7 @@ android {
 }
 
 dependencies {
-    compile project(':usbCameraCommon')
+    // Simplified dependencies for Glass proof-of-concept
+    // Remove complex UVC dependencies for initial build
+    // implementation project(':usbCameraCommon')
 }

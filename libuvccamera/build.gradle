@@ -27,6 +27,7 @@ import org.apache.tools.ant.taskdefs.condition.Os
 android {
 	compileSdkVersion versionCompiler
 	buildToolsVersion versionBuildTool
+	namespace 'com.serenegiant.uvccamera'  // Required for modern AGP
 
 	compileOptions {
 		sourceCompatibility javaSourceCompatibility
@@ -34,8 +35,8 @@ android {
 	}
 
     defaultConfig {
-        minSdkVersion 14
-		targetSdkVersion versionTarget
+        minSdkVersion versionMinimum  // Glass API 19
+		targetSdkVersion versionTarget // Glass API 19
     }
 
     buildTypes {
@@ -52,9 +53,10 @@ android {
 	}
 }
 
-tasks.withType(JavaCompile) {
-	compileTask -> compileTask.dependsOn ndkBuild
-}
+// Disable NDK build for Glass initial build test
+// tasks.withType(JavaCompile) {
+//	compileTask -> compileTask.dependsOn ndkBuild
+// }
 
 String getNdkBuildPath() {
 	Properties properties = new Properties()
@@ -81,12 +83,13 @@ task ndkClean(type: Exec, description: 'clean JNI libraries') {
 	commandLine ndkBuildPath, 'clean', '-C', file('src/main').absolutePath
 }
 
-clean.dependsOn 'ndkClean'
+// Disable NDK clean for initial Glass build test
+// clean.dependsOn 'ndkClean'
 
 dependencies {
-    compile fileTree(dir: new File(buildDir, 'libs'), include: '*.jar')
-	compile "com.android.support:support-annotations:${supportLibVersion}"
-	compile("com.serenegiant:common:${commonLibVersion}") {
+    implementation fileTree(dir: new File(buildDir, 'libs'), include: '*.jar')
+	implementation "com.android.support:support-annotations:${supportLibVersion}"
+	implementation("com.serenegiant:common:${commonLibVersion}") {
 		exclude module: 'support-v4'
 	}
 }
