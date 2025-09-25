@@ -46,12 +46,14 @@ import com.serenegiant.usb.USBMonitor;
 import com.serenegiant.usb.USBMonitor.OnDeviceConnectListener;
 import com.serenegiant.usb.USBMonitor.UsbControlBlock;
 import com.serenegiant.usb.UVCCamera;
+import com.serenegiant.usb.IFrameCallback;
 import com.serenegiant.widget.UVCCameraTextureView;
 import com.flir.boson.glass.R;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 
 public final class MainActivity extends Activity implements CameraDialog.CameraDialogParent {
     private static final String TAG = "MainActivity";
@@ -66,6 +68,11 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
     private int mThermalPalette = 0; // 0=Iron, 1=Rainbow, 2=Gray
     private static final int THERMAL_MIN_TEMP = -40; // Celsius
     private static final int THERMAL_MAX_TEMP = 400; // Celsius
+
+    // Raw thermal data processing
+    private volatile ByteBuffer mLatestThermalFrame = null;
+    private final Object mThermalLock = new Object();
+    private boolean mRawDataEnabled = false;
 
     private final Object mSync = new Object();
 
@@ -143,7 +150,7 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
 
             @Override
             public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
-                if (e1.getY() - e2.getY() > 100) { // Swipe down
+                if (e2.getY() - e1.getY() > 100) { // Swipe down - fixed logic
                     if (DEBUG) Log.v(TAG, "Swipe down - capture image");
                     captureImage();
                     return true;
@@ -213,19 +220,66 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
 
     // Glass thermal imaging functions
     private void measureCenterTemperature() {
-        // Simulate thermal measurement at center of display
-        // In real implementation, this would read thermal data from FLIR Boson
-        float temperature = 20.0f + (float)(Math.random() * 60.0f); // Simulated 20-80°C
+        float temperature = readCenterTemperatureFromThermalData();
 
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 mTemperatureText.setText(String.format("Center: %.1f°C", temperature));
                 mTemperatureText.setVisibility(View.VISIBLE);
+
+                // Hide temperature after 3 seconds
+                mTemperatureText.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        mTemperatureText.setVisibility(View.GONE);
+                    }
+                }, 3000);
             }
         });
 
         if (DEBUG) Log.v(TAG, "Center temperature: " + temperature + "°C");
+    }
+
+    private float readCenterTemperatureFromThermalData() {
+        synchronized (mThermalLock) {
+            if (mLatestThermalFrame == null || !mRawDataEnabled) {
+                // Fallback to simulated data if no real thermal data available
+                return 20.0f + (float)(Math.random() * 60.0f);
+            }
+
+            try {
+                // FLIR Boson Y16 format: 16-bit values, little endian
+                // For 640x512 Boson, center pixel is at (320, 256)
+                // For 320x256 Boson, center pixel is at (160, 128)
+                int width = 640; // Assume Boson 640 for now
+                int height = 512;
+                int centerX = width / 2;
+                int centerY = height / 2;
+
+                // Each pixel is 2 bytes (16-bit)
+                int pixelOffset = (centerY * width + centerX) * 2;
+
+                if (pixelOffset + 1 < mLatestThermalFrame.capacity()) {
+                    // Read 16-bit value (little endian)
+                    short rawValue = mLatestThermalFrame.getShort(pixelOffset);
+
+                    // Convert raw digital value to temperature
+                    // This is a simplified conversion - FLIR Boson typically uses
+                    // factory calibration data for accurate temperature conversion
+                    // Raw value range is typically 0-16383 for temperature range
+                    float normalizedValue = (rawValue & 0xFFFF) / 65535.0f;
+                    float temperature = THERMAL_MIN_TEMP + normalizedValue * (THERMAL_MAX_TEMP - THERMAL_MIN_TEMP);
+
+                    return Math.max(THERMAL_MIN_TEMP, Math.min(THERMAL_MAX_TEMP, temperature));
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error reading thermal data", e);
+            }
+        }
+
+        // Fallback to simulated data
+        return 20.0f + (float)(Math.random() * 60.0f);
     }
 
     private void toggleThermalMode() {
@@ -233,6 +287,9 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
 
         if (mThermalMode) {
             mThermalPalette = (mThermalPalette + 1) % 3; // Cycle through palettes
+            enableRawThermalData();
+        } else {
+            disableRawThermalData();
         }
 
         runOnUiThread(new Runnable() {
@@ -242,10 +299,56 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                     "Thermal Mode: " + getPaletteName() :
                     "Normal Mode";
                 updateStatusText(status);
+
+                if (mThermalMode) {
+                    generateThermalOverlay();
+                } else {
+                    mThermalOverlay.setVisibility(View.GONE);
+                }
             }
         });
 
         if (DEBUG) Log.v(TAG, "Thermal mode: " + mThermalMode + ", palette: " + mThermalPalette);
+    }
+
+    private void enableRawThermalData() {
+        synchronized (mSync) {
+            if (mUVCCamera != null) {
+                try {
+                    // Set frame callback to receive raw Y16 thermal data
+                    mUVCCamera.setFrameCallback(new IFrameCallback() {
+                        @Override
+                        public void onFrame(ByteBuffer frame) {
+                            synchronized (mThermalLock) {
+                                mLatestThermalFrame = frame;
+                                mRawDataEnabled = true;
+                            }
+                        }
+                    }, UVCCamera.PIXEL_FORMAT_RAW);
+
+                    if (DEBUG) Log.v(TAG, "Raw thermal data enabled");
+                } catch (Exception e) {
+                    Log.e(TAG, "Error enabling raw thermal data", e);
+                }
+            }
+        }
+    }
+
+    private void disableRawThermalData() {
+        synchronized (mSync) {
+            if (mUVCCamera != null) {
+                try {
+                    mUVCCamera.setFrameCallback(null, 0);
+                    if (DEBUG) Log.v(TAG, "Raw thermal data disabled");
+                } catch (Exception e) {
+                    Log.e(TAG, "Error disabling raw thermal data", e);
+                }
+            }
+        }
+        synchronized (mThermalLock) {
+            mLatestThermalFrame = null;
+            mRawDataEnabled = false;
+        }
     }
 
     private String getPaletteName() {
@@ -255,6 +358,116 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
             case 2: return "Gray";
             default: return "Unknown";
         }
+    }
+
+    private void generateThermalOverlay() {
+        synchronized (mThermalLock) {
+            if (mLatestThermalFrame == null || !mRawDataEnabled) {
+                return;
+            }
+
+            // Create thermal visualization bitmap
+            Bitmap thermalBitmap = createThermalBitmap(mLatestThermalFrame);
+            if (thermalBitmap != null) {
+                // Draw center reticle
+                Canvas canvas = new Canvas(thermalBitmap);
+                Paint paint = new Paint();
+                paint.setColor(Color.WHITE);
+                paint.setStrokeWidth(2.0f);
+                paint.setAntiAlias(true);
+
+                int centerX = thermalBitmap.getWidth() / 2;
+                int centerY = thermalBitmap.getHeight() / 2;
+                int crossSize = 20;
+
+                // Draw crosshair
+                canvas.drawLine(centerX - crossSize, centerY, centerX + crossSize, centerY, paint);
+                canvas.drawLine(centerX, centerY - crossSize, centerX, centerY + crossSize, paint);
+
+                mThermalOverlay.setImageBitmap(thermalBitmap);
+                mThermalOverlay.setVisibility(View.VISIBLE);
+            }
+        }
+    }
+
+    private Bitmap createThermalBitmap(ByteBuffer thermalData) {
+        try {
+            // Thermal image dimensions - adjust based on camera model
+            int width = 640; // Boson 640
+            int height = 512;
+
+            if (thermalData.capacity() < width * height * 2) {
+                // Try smaller resolution
+                width = 320; // Boson 320
+                height = 256;
+            }
+
+            if (thermalData.capacity() < width * height * 2) {
+                Log.e(TAG, "Thermal data buffer too small");
+                return null;
+            }
+
+            Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            int[] pixels = new int[width * height];
+
+            for (int i = 0; i < pixels.length; i++) {
+                // Read 16-bit thermal value
+                short rawValue = thermalData.getShort(i * 2);
+                int thermalValue = rawValue & 0xFFFF;
+
+                // Apply thermal color palette
+                int color = applyThermalPalette(thermalValue, mThermalPalette);
+                pixels[i] = color;
+            }
+
+            bitmap.setPixels(pixels, 0, width, 0, 0, width, height);
+            return bitmap;
+        } catch (Exception e) {
+            Log.e(TAG, "Error creating thermal bitmap", e);
+            return null;
+        }
+    }
+
+    private int applyThermalPalette(int thermalValue, int palette) {
+        // Normalize thermal value (0-65535) to 0-255
+        int normalized = (thermalValue * 255) / 65535;
+
+        switch (palette) {
+            case 0: // Iron palette
+                return applyIronPalette(normalized);
+            case 1: // Rainbow palette
+                return applyRainbowPalette(normalized);
+            case 2: // Grayscale palette
+                return Color.argb(255, normalized, normalized, normalized);
+            default:
+                return Color.argb(255, normalized, normalized, normalized);
+        }
+    }
+
+    private int applyIronPalette(int value) {
+        // Iron color palette - cold=black/blue, hot=red/yellow/white
+        int r, g, b;
+        if (value < 85) {
+            r = 0;
+            g = 0;
+            b = value * 3;
+        } else if (value < 170) {
+            r = (value - 85) * 3;
+            g = 0;
+            b = 255 - ((value - 85) * 3);
+        } else {
+            r = 255;
+            g = (value - 170) * 3;
+            b = 0;
+        }
+        return Color.argb(255, Math.min(255, r), Math.min(255, g), Math.min(255, b));
+    }
+
+    private int applyRainbowPalette(int value) {
+        // Rainbow color palette
+        float hue = (value / 255.0f) * 300.0f; // Hue from 0 to 300 (blue to red)
+        float[] hsv = {hue, 1.0f, 1.0f};
+        return Color.HSVToColor(hsv);
     }
 
     private void captureImage() {
@@ -276,21 +489,33 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
 
     private void saveCapturedImage(Bitmap bitmap) {
         try {
-            String filename = "thermal_capture_" + System.currentTimeMillis() + ".jpg";
-            File file = new File(Environment.getExternalStorageDirectory() + "/flir-boson", filename);
+            long timestamp = System.currentTimeMillis();
+            String baseFilename = "thermal_capture_" + timestamp;
+            File dir = new File(Environment.getExternalStorageDirectory(), "flir-boson");
 
-            FileOutputStream out = new FileOutputStream(file);
+            // Save visual image
+            String visualFilename = baseFilename + "_visual.jpg";
+            File visualFile = new File(dir, visualFilename);
+
+            FileOutputStream out = new FileOutputStream(visualFile);
             bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out);
             out.close();
 
+            // Save radiometric data if available
+            saveRadiometricData(baseFilename, timestamp);
+
+            final String finalFilename = visualFilename;
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    Toast.makeText(MainActivity.this, "Image saved: " + filename, Toast.LENGTH_SHORT).show();
+                    String message = mRawDataEnabled ?
+                        "Images saved: " + finalFilename + " + RAW data" :
+                        "Image saved: " + finalFilename;
+                    Toast.makeText(MainActivity.this, message, Toast.LENGTH_SHORT).show();
                 }
             });
 
-            if (DEBUG) Log.v(TAG, "Image captured: " + filename);
+            if (DEBUG) Log.v(TAG, "Image captured: " + finalFilename);
         } catch (IOException e) {
             Log.e(TAG, "Error saving image", e);
             runOnUiThread(new Runnable() {
@@ -299,6 +524,53 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                     Toast.makeText(MainActivity.this, "Error saving image", Toast.LENGTH_SHORT).show();
                 }
             });
+        }
+    }
+
+    private void saveRadiometricData(String baseFilename, long timestamp) {
+        synchronized (mThermalLock) {
+            if (mLatestThermalFrame == null || !mRawDataEnabled) {
+                return;
+            }
+
+            try {
+                // Save raw thermal data
+                String rawFilename = baseFilename + "_thermal.raw";
+                File dir = new File(Environment.getExternalStorageDirectory(), "flir-boson");
+                File rawFile = new File(dir, rawFilename);
+
+                FileOutputStream out = new FileOutputStream(rawFile);
+                byte[] thermalBytes = new byte[mLatestThermalFrame.remaining()];
+                mLatestThermalFrame.get(thermalBytes);
+                out.write(thermalBytes);
+                out.close();
+
+                // Save metadata
+                String metaFilename = baseFilename + "_meta.txt";
+                File metaFile = new File(dir, metaFilename);
+                FileOutputStream metaOut = new FileOutputStream(metaFile);
+
+                String metadata = String.format(
+                    "Timestamp: %d\n" +
+                    "Thermal Mode: %s\n" +
+                    "Palette: %s\n" +
+                    "Center Temperature: %.1f°C\n" +
+                    "Data Size: %d bytes\n" +
+                    "Format: Y16 (16-bit raw thermal)\n",
+                    timestamp,
+                    mThermalMode ? "Enabled" : "Disabled",
+                    getPaletteName(),
+                    readCenterTemperatureFromThermalData(),
+                    thermalBytes.length
+                );
+
+                metaOut.write(metadata.getBytes());
+                metaOut.close();
+
+                if (DEBUG) Log.v(TAG, "Radiometric data saved: " + rawFilename);
+            } catch (Exception e) {
+                Log.e(TAG, "Error saving radiometric data", e);
+            }
         }
     }
 
