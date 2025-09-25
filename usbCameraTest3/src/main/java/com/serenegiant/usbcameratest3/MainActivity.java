@@ -225,7 +225,7 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                mTemperatureText.setText(String.format("Center: %.1f°C", temperature));
+                mTemperatureText.setText(String.format("Center: ~%.1f°C", temperature));
                 mTemperatureText.setVisibility(View.VISIBLE);
 
                 // Hide temperature after 3 seconds
@@ -264,13 +264,14 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                     // Read 16-bit value (little endian)
                     short rawValue = mLatestThermalFrame.getShort(pixelOffset);
 
-                    // Convert raw digital value to temperature
-                    // This is a simplified conversion - FLIR Boson typically uses
-                    // factory calibration data for accurate temperature conversion
-                    // Raw value range is typically 0-16383 for temperature range
-                    float normalizedValue = (rawValue & 0xFFFF) / 65535.0f;
-                    float temperature = THERMAL_MIN_TEMP + normalizedValue * (THERMAL_MAX_TEMP - THERMAL_MIN_TEMP);
+                    // Improved temperature estimation assuming T-Linear format
+                    // T-Linear format: raw value is proportional to absolute temperature
+                    // Common format for FLIR cores is centi-Kelvin (Kelvin * 100)
+                    // NOTE: This is still an estimation - true accuracy requires SDK calibration
+                    float tempInKelvin = (rawValue & 0xFFFF) / 100.0f;
+                    float temperature = tempInKelvin - 273.15f;
 
+                    // Clamp to reasonable thermal imaging range as safety measure
                     return Math.max(THERMAL_MIN_TEMP, Math.min(THERMAL_MAX_TEMP, temperature));
                 }
             } catch (Exception e) {

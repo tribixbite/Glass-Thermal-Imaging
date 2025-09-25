@@ -21,7 +21,7 @@ fi
 # 1. Set up environment for Glass (requires older Java for API 19 compatibility)
 export ANDROID_HOME="$HOME/android-sdk"
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
-export JAVA_HOME="/data/data/com.termux/files/usr/lib/jvm/java-21-openjdk"
+export JAVA_HOME="/data/data/com.termux/files/usr/lib/jvm/java-17-openjdk"
 export PATH="$JAVA_HOME/bin:/data/data/com.termux/files/usr/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/34.0.0:$PATH"
 
 echo "Step 1: Checking prerequisites..."
@@ -73,12 +73,11 @@ if ! command -v qemu-x86_64 &>/dev/null; then
 fi
 
 # Check for patched AAPT2 for Termux compatibility
-AAPT2_PATH="$(pwd)/tools/aapt2-arm64/aapt2"
+AAPT2_PATH="$(pwd)/tools/aapt2"
 if [ -f "$AAPT2_PATH" ]; then
     echo "Found patched AAPT2 for Termux at: $AAPT2_PATH"
     # Make sure it's executable
     chmod +x "$AAPT2_PATH"
-    chmod +x "$(dirname "$AAPT2_PATH")/aapt2.elf"
 else
     echo "Error: Patched AAPT2 not found at $AAPT2_PATH"
     echo "Termux requires patched AAPT2 for Android builds"
