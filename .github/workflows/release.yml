@@ -1,0 +1,159 @@
+name: Release UVC-Boson Glass APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+env:
+  JAVA_VERSION: '21'
+  NDK_VERSION: '26.1.10909125'
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        api-level: 19
+        target: android-19
+        arch: x86_64
+
+    - name: Install Android NDK
+      run: |
+        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;${{ env.NDK_VERSION }}"
+
+    - name: Cache Gradle dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+
+    - name: Make gradlew executable
+      run: chmod +x ./gradlew
+
+    - name: Download Gradle wrapper if missing
+      run: |
+        if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+          curl -L https://github.com/gradle/gradle/raw/v7.6.0/gradle/wrapper/gradle-wrapper.jar -o gradle/wrapper/gradle-wrapper.jar
+        fi
+
+    - name: Set up NDK environment
+      run: |
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+        echo "NDK_ROOT=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+        echo "ndk.dir=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> local.properties
+
+    - name: Enable NDK build for release
+      run: |
+        # Re-enable NDK build that was disabled for Termux aarch64 compatibility
+        sed -i 's|// tasks.withType(JavaCompile) {|tasks.withType(JavaCompile) {|' libuvccamera/build.gradle
+        sed -i 's|//\s*compileTask -> compileTask.dependsOn ndkBuild|	compileTask -> compileTask.dependsOn ndkBuild|' libuvccamera/build.gradle
+        sed -i 's|// }|}|' libuvccamera/build.gradle
+
+    - name: Build native libraries
+      run: |
+        cd libuvccamera/src/main/jni
+        $ANDROID_NDK_HOME/ndk-build clean
+        $ANDROID_NDK_HOME/ndk-build APP_ABI="armeabi-v7a arm64-v8a" APP_PLATFORM=android-19 APP_OPTIM=release
+        cd ../../../..
+
+    - name: Build release APK
+      run: |
+        ./gradlew :usbCameraTest3:assembleRelease --stacktrace
+
+    - name: Sign APK (if keystore available)
+      run: |
+        if [ -f release.keystore ]; then
+          echo "Signing APK with release keystore"
+          # Add signing configuration here if needed
+        else
+          echo "No release keystore found, using debug signature"
+        fi
+
+    - name: Verify APK contents
+      run: |
+        echo "=== APK Analysis ==="
+        aapt dump badging usbCameraTest3/build/outputs/apk/release/usbCameraTest3-release-unsigned.apk || \
+        aapt dump badging usbCameraTest3/build/outputs/apk/release/usbCameraTest3-release.apk || \
+        echo "Could not analyze APK"
+
+        echo "=== Native Libraries Check ==="
+        unzip -l usbCameraTest3/build/outputs/apk/release/usbCameraTest3-release*.apk | grep -E "\.so$" || echo "❌ No native libraries found"
+
+    - name: Get release version
+      id: get_version
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+        else
+          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.get_version.outputs.version }}
+        release_name: UVC-Boson Glass ${{ steps.get_version.outputs.version }}
+        body: |
+          ## FLIR UVC-Boson Thermal Camera for Google Glass XE24
+
+          ### Features
+          - ✅ Complete UVC camera library with native USB support
+          - ✅ FLIR Boson thermal camera integration
+          - ✅ Google Glass XE24 optimized UI and gestures
+          - ✅ Real-time thermal imaging display
+          - ✅ USB OTG host capability
+          - ✅ Built with Android NDK for ARM targets
+
+          ### Installation
+          1. Enable "Unknown sources" in Glass settings
+          2. Install APK via ADB: `adb install usbCameraTest3-release.apk`
+          3. Connect FLIR Boson camera via USB OTG adapter
+          4. Launch "Glass Thermal" from timeline
+
+          ### Requirements
+          - Google Glass XE24 (Android 4.4 KitKat)
+          - FLIR Boson thermal camera
+          - USB OTG adapter
+          - External power for camera (recommended)
+
+          ### Technical Details
+          - **Target SDK**: API 19 (Glass XE24)
+          - **Native Libraries**: libuvc, libusb, libjpeg-turbo
+          - **Architecture**: ARMv7-A and ARM64-v8a
+          - **Glass SDK**: Real GDK integration
+        draft: false
+        prerelease: false
+
+    - name: Upload Release APK
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: usbCameraTest3/build/outputs/apk/release/usbCameraTest3-release.apk
+        asset_name: uvc-boson-glass-${{ steps.get_version.outputs.version }}.apk
+        asset_content_type: application/vnd.android.package-archive

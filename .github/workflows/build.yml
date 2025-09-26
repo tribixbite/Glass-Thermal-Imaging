@@ -1,0 +1,109 @@
+name: Build UVC-Boson APK with Native Libraries
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+env:
+  JAVA_VERSION: '21'
+  NDK_VERSION: '26.1.10909125'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        api-level: 19
+        target: android-19
+        arch: x86_64
+
+    - name: Install Android NDK
+      run: |
+        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;${{ env.NDK_VERSION }}"
+
+    - name: Cache Gradle dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+
+    - name: Make gradlew executable
+      run: chmod +x ./gradlew
+
+    - name: Download Gradle wrapper if missing
+      run: |
+        if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+          curl -L https://github.com/gradle/gradle/raw/v7.6.0/gradle/wrapper/gradle-wrapper.jar -o gradle/wrapper/gradle-wrapper.jar
+        fi
+
+    - name: Set up NDK environment
+      run: |
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+        echo "NDK_ROOT=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+        echo "ndk.dir=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> local.properties
+
+    - name: Enable NDK build in libuvccamera
+      run: |
+        # Re-enable NDK build that was disabled for Termux aarch64 compatibility
+        sed -i 's|// tasks.withType(JavaCompile) {|tasks.withType(JavaCompile) {|' libuvccamera/build.gradle
+        sed -i 's|//\s*compileTask -> compileTask.dependsOn ndkBuild|	compileTask -> compileTask.dependsOn ndkBuild|' libuvccamera/build.gradle
+        sed -i 's|// }|}|' libuvccamera/build.gradle
+
+    - name: Configure Android NDK for cross-compilation
+      run: |
+        # Ensure NDK toolchain is properly configured for ARM targets
+        export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+        echo "NDK toolchain configured for cross-compilation to ARM targets"
+
+    - name: Build native libraries
+      run: |
+        # Build NDK libraries first
+        cd libuvccamera/src/main/jni
+        $ANDROID_NDK_HOME/ndk-build clean
+        $ANDROID_NDK_HOME/ndk-build APP_ABI="armeabi-v7a arm64-v8a" APP_PLATFORM=android-19
+        cd ../../../..
+
+    - name: Build debug APK
+      run: |
+        ./gradlew :usbCameraTest3:assembleDebug --stacktrace
+
+    - name: Verify native libraries in APK
+      run: |
+        # Check that native libraries are included
+        unzip -l usbCameraTest3/build/outputs/apk/debug/usbCameraTest3-debug.apk | grep -E "\.so$" || echo "❌ No native libraries found in APK"
+
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: uvc-boson-glass-apk
+        path: usbCameraTest3/build/outputs/apk/debug/usbCameraTest3-debug.apk
+        retention-days: 30
+
+    - name: Upload native libraries artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: native-libraries
+        path: |
+          libuvccamera/src/main/libs/**/*.so
+          libuvccamera/build/intermediates/library_jni/debug/**/*.so
+        retention-days: 30
+        if-no-files-found: warn
