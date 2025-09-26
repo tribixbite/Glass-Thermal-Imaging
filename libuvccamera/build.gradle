@@ -53,10 +53,10 @@ android {
 	}
 }
 
-// Disable NDK build for Glass initial build test
-// tasks.withType(JavaCompile) {
-//	compileTask -> compileTask.dependsOn ndkBuild
-// }
+// Re-enable NDK build for full camera functionality
+tasks.withType(JavaCompile) {
+	compileTask -> compileTask.dependsOn ndkBuild
+}
 
 String getNdkBuildPath() {
 	Properties properties = new Properties()
@@ -83,8 +83,8 @@ task ndkClean(type: Exec, description: 'clean JNI libraries') {
 	commandLine ndkBuildPath, 'clean', '-C', file('src/main').absolutePath
 }
 
-// Disable NDK clean for initial Glass build test
-// clean.dependsOn 'ndkClean'
+// Re-enable NDK clean for full camera functionality
+clean.dependsOn 'ndkClean'
 
 dependencies {
     implementation fileTree(dir: new File(buildDir, 'libs'), include: '*.jar')

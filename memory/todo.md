@@ -1,174 +1,93 @@
-# UVC-Boson Glass Migration Todo
+# Google Glass Thermal Camera App TODO List
 
-## Project Analysis (COMPLETE)
+This document outlines the tasks required to successfully build the UVC-Boson project into a functional thermal imaging application for Google Glass XE.
 
-### Current State Assessment
-- **Legacy Build System**: Gradle 2.3.0 (2017) - needs complete modernization
-- **Target APIs**: minSdk=18, targetSdk=23 - incompatible with Glass (API 19)
-- **Repositories**: jcenter() deprecated - must migrate to Google/Maven
-- **Java**: 1.7 compatibility - can upgrade to 1.8 for Glass
-- **Build Tools**: 25.0.2 - very outdated
+## Phase 1: Core Functionality & Build Fixes
 
-### Sample Apps Analysis
-- **usbCameraTest3**: Best candidate - has recording, preview, still capture
-- **usbCameraTest6**: Two-camera support - could be useful for Glass/thermal overlay
-- **usbCameraTest8**: Camera controls - good for thermal camera settings
-- **Recommendation**: Start with usbCameraTest3, adapt for Glass
+These are the essential tasks to get a basic version of the app building and running.
 
-## Phase 1: Build System Modernization (HIGH PRIORITY)
+- [x] **Enable and Verify NDK Build:**
+    - In `libuvccamera/build.gradle`, re-enable the `ndkBuild` task.
+    - This is critical for compiling the JNI code that communicates with the USB camera.
+    - **Action:** Uncomment the `dependsOn ndkBuild` and `dependsOn ndkClean` lines.
+    - **Verify:** Ensure you have the Android NDK installed and the `ndk.dir` property is correctly set in your `local.properties` file.
 
-### 1.1 Root build.gradle Updates
-- [ ] Update Gradle wrapper to 8.4 (compatible with modern Android tools)
-- [ ] Replace com.android.tools.build:gradle:2.3.0 → 8.3.0
-- [ ] Replace jcenter() with google() and mavenCentral()
-- [ ] Update support library versions to AndroidX equivalents
-- [ ] Add Glass-compatible SDK versions
+- [x] **Implement GDK Voice Trigger:**
+    - Allow the app to be launched with a voice command (e.g., "Okay Glass, start thermal camera").
+    - **Action:**
+        1. Modify `usbCameraTest3/src/main/AndroidManifest.xml` to add the `VOICE_TRIGGER` intent filter to the `MainActivity`.
+        2. Create a `res/xml/voice_trigger.xml` file in `usbCameraTest3` to define the keyword.
 
-### 1.2 Sample App build.gradle Updates (Focus on usbCameraTest3)
-- [ ] Update compileSdkVersion to 34 (for build tools)
-- [ ] Set minSdkVersion to 19 (Glass requirement)
-- [ ] Set targetSdkVersion to 19 (Glass compatibility)
-- [ ] Replace 'compile' with 'implementation'
-- [ ] Update applicationId to glass-specific namespace
-- [ ] Add USB host feature requirements
+- [x] **Integrate GDK Gesture Detector:**
+    - Replace the standard `android.view.GestureDetector` with the `com.google.android.glass.touchpad.GestureDetector`.
+    - This ensures reliable handling of Glass-specific gestures.
+    - **Action:**
+        1. Update `MainActivity.java` to use the GDK `GestureDetector`.
+        2. Map gestures to actions:
+            - `TAP`: Toggle settings menu (once created).
+            - `TWO_TAP`: Take a picture.
+            - `SWIPE_RIGHT` / `SWIPE_LEFT`: Navigate settings menu.
+            - `SWIPE_DOWN`: Exit the application (`finish()`).
 
-### 1.3 Dependency Management
-- [ ] Migrate from Support Library to AndroidX
-- [ ] Update libcommon repository URL (if still needed)
-- [ ] Add Glass GDK dependencies if available
-- [ ] Ensure USB host support libraries
+- [x] **Add GPS Location Permission and Implementation:**
+    - Add GPS metadata to captured images and videos.
+    - **Action:**
+        1. Add the `ACCESS_FINE_LOCATION` permission to `AndroidManifest.xml`.
+        2. In `MainActivity.java`, implement `LocationManager` to get the current GPS coordinates.
+        3. Update `saveRadiometricData()` to include GPS coordinates in the metadata file.
 
-## Phase 2: Glass-Specific Adaptations (MEDIUM PRIORITY)
+## Phase 2: Feature Implementation
 
-### 2.1 UI/UX Adaptations for Glass
-- [ ] Replace standard Android UI with Glass-optimized layouts
-- [ ] Implement Glass gesture detection (tap, two-finger tap, swipe)
-- [ ] Create Glass card-based UI metaphor
-- [ ] Optimize layout for 640×360 prism display
-- [ ] Remove incompatible UI elements (complex menus, etc.)
+With the core app running, these tasks add the required features.
 
-### 2.2 Glass Integration Features
-- [ ] Add voice trigger support ("OK Glass, start thermal camera")
-- [ ] Implement Glass timeline integration for captures
-- [ ] Add Glass-specific permissions and features
-- [ ] Create Glass-optimized camera preview sizing
+- [x] **Implement Video Recording:**
+    - Add the ability to record video from the thermal camera.
+    - **Action:**
+        1. In `MainActivity.java`, add a method `startRecording()` and `stopRecording()`.
+        2. Use the `mUVCCamera.startCapture()` and `mUVCCamera.stopCapture()` methods.
+        3. Add a gesture or menu item to trigger recording.
+        4. Save the video file to the capture directory, including metadata.
 
-### 2.3 Thermal Imaging Optimizations
-- [ ] Optimize thermal data visualization for Glass display
-- [ ] Add temperature measurement overlays
-- [ ] Implement false color mapping for thermal data
-- [ ] Create temperature scale indicators suitable for Glass
+- [x] **Create a Glass-Style Settings Menu:**
+    - Create a menu for changing settings, navigable with swipe gestures.
+    - **Action:**
+        1. Create a `MenuActivity.java` that is launched from `MainActivity`.
+        2. Use the GDK `CardScrollView` and a `CardScrollAdapter` to create a list of settings.
+        3. Implement menu items for:
+            - Toggling thermal mode.
+            - Cycling through color palettes.
+            - Toggling GPS metadata.
+            - Starting/stopping video recording.
 
-## Phase 3: Technical Implementation (MEDIUM PRIORITY)
+- [x] **Implement a Live Card:**
+    - Show the status of the camera on the Glass timeline when the app is not in the foreground.
+    - **Action:**
+        1. Create a `LiveCardService.java` that extends `Service`.
+        2. Use the `LiveCard` API to publish a card.
+        3. Update the card to show "Camera Connected" or "Camera Disconnected" based on USB events.
+        4. Set the card's action to open the `MainActivity`.
 
-### 3.1 USB OTG Integration
-- [ ] Verify Glass USB OTG host capabilities
-- [ ] Test power requirements for FLIR Boson camera
-- [ ] Implement USB device detection and enumeration
-- [ ] Add error handling for OTG connection issues
-- [ ] Create power management for battery optimization
+## Phase 3: UI/UX Polish and Refinements
 
-### 3.2 Camera Integration
-- [ ] Adapt UVCCamera for Glass hardware constraints
-- [ ] Optimize frame rates for Glass performance
-- [ ] Implement thermal-specific camera controls
-- [ ] Add FLIR Boson-specific format support (I420, etc.)
-- [ ] Memory optimization for Glass RAM limitations
+These tasks improve the user experience and robustness of the app.
 
-### 3.3 Performance Optimizations
-- [ ] Optimize for OMAP 4430 dual-core processor
-- [ ] Implement efficient memory management (682MB limit)
-- [ ] Battery life optimizations for 570mAh battery
-- [ ] Reduce processing overhead for real-time display
+- [x] **Refine UI for Glass:**
+    - Ensure all UI elements are optimized for the Glass display (640x360).
+    - **Action:**
+        1. Use the GDK `CardBuilder` for displaying text and status information where appropriate.
+        2. Ensure text is large and clear (Roboto font, as recommended in docs).
+        3. Provide clear visual feedback for all actions (e.g., "Picture Saved", "Recording Started").
 
-## Phase 4: Testing & Validation (LOW PRIORITY)
+- [ ] **Improve Error Handling:**
+    - Make the app more robust to errors (e.g., camera disconnects, storage full).
+    - **Action:**
+        1. Add checks for storage space before saving files.
+        2. Provide user-friendly error messages on the Glass display.
+        3. Handle cases where the camera returns invalid data.
 
-### 4.1 Build Validation
-- [ ] Verify APK builds successfully with modern tools
-- [ ] Test APK installation on Glass hardware
-- [ ] Validate USB OTG detection and connection
-- [ ] Performance benchmarking on Glass
-
-### 4.2 Functional Testing
-- [ ] Test thermal camera live preview on Glass
-- [ ] Verify gesture controls work correctly
-- [ ] Test recording and capture functionality
-- [ ] Validate temperature measurement accuracy
-
-### 4.3 Integration Testing
-- [ ] Test with actual FLIR Boson camera hardware
-- [ ] Verify power consumption and battery life
-- [ ] Test USB OTG cable and power delivery
-- [ ] End-to-end thermal imaging workflow
-
-## Technical Decisions Log
-
-### Build System Migration
-- **Decision**: Use Gradle 8.4 + Android Gradle Plugin 8.3.0
-- **Rationale**: Latest stable versions compatible with modern Android SDK
-- **Glass Impact**: Maintains API 19 target while using modern build tools
-
-### Sample App Selection
-- **Decision**: Start with usbCameraTest3 as base
-- **Rationale**: Most complete feature set (preview, recording, capture)
-- **Modifications Needed**: Extensive UI overhaul for Glass, API downgrade to 19
-
-### Repository Migration
-- **Decision**: Replace jcenter() with google() + mavenCentral()
-- **Rationale**: jcenter() is deprecated and will be shut down
-- **Glass Impact**: Ensures long-term build stability
-
-## Glass Hardware Constraints
-
-### Display Limitations
-- **Resolution**: 640×360 pixels (non-standard aspect ratio)
-- **Type**: Prism display (unique visualization requirements)
-- **UI Paradigm**: Card-based, minimal information density
-
-### Processing Limitations
-- **CPU**: OMAP 4430 dual-core (older architecture)
-- **RAM**: 682MB available (strict memory management needed)
-- **Storage**: Limited space (optimize APK size)
-
-### Power Limitations
-- **Battery**: 570mAh (aggressive power management required)
-- **USB OTG**: May require external power for thermal camera
-- **Thermal**: Heat generation concerns with intensive processing
-
-## Success Criteria
-
-### Minimum Viable Product (MVP)
-- [x] APK builds successfully on modern toolchain
-- [ ] APK installs and runs on Google Glass XE24
-- [ ] Basic thermal camera connection via USB OTG
-- [ ] Live thermal preview on Glass display
-- [ ] Basic Glass gesture controls (tap to capture)
-
-### Full Feature Set
-- [ ] Voice command integration ("OK Glass" triggers)
-- [ ] Glass timeline integration for thermal captures
-- [ ] Temperature measurement overlays
-- [ ] Recording and playback functionality
-- [ ] Glass-optimized thermal visualization modes
-- [ ] Power-efficient operation for extended use
-
-## Current Priority: Build System Modernization
-
-**Next Steps:**
-1. Update root build.gradle to modern versions
-2. Modify usbCameraTest3 for Glass compatibility
-3. Update build-on-termux.sh for new project structure
-4. Test build and create initial APK
-
-**Risk Assessment:**
-- **High**: Native library compatibility with modern NDK
-- **Medium**: USB OTG power requirements for Boson camera
-- **Low**: Glass UI adaptation (well-documented patterns)
-
-**Estimated Timeline:**
-- Phase 1: 2-3 days (build modernization)
-- Phase 2: 3-4 days (Glass adaptation)
-- Phase 3: 2-3 days (technical implementation)
-- Phase 4: 1-2 days (testing and validation)
-
-**Total**: ~8-12 days for complete Glass-compatible thermal imaging app
+- [ ] **Review and Refactor Code:**
+    - Clean up the codebase and ensure it follows best practices.
+    - **Action:**
+        1. Remove unused code and variables.
+        2. Add comments where the logic is complex.
+        3. Ensure the app correctly handles the Android Activity lifecycle.

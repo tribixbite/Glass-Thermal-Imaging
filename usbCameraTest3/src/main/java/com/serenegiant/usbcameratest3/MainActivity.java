@@ -23,37 +23,43 @@
 
 package com.serenegiant.usbcameratest3;
 
+import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.SurfaceTexture;
 import android.hardware.usb.UsbDevice;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
 import android.util.Log;
-import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.View;
 import android.widget.ImageView;
-import android.widget.TextView;
 import android.widget.Toast;
 
-import android.app.Activity;
-import com.serenegiant.usb.CameraDialog;
-import com.serenegiant.usb.USBMonitor;
-import com.serenegiant.usb.USBMonitor.OnDeviceConnectListener;
-import com.serenegiant.usb.USBMonitor.UsbControlBlock;
-import com.serenegiant.usb.UVCCamera;
-import com.serenegiant.usb.IFrameCallback;
-import com.serenegiant.widget.UVCCameraTextureView;
 import com.flir.boson.glass.R;
+import com.google.android.glass.touchpad.Gesture;
+import com.google.android.glass.touchpad.GestureDetector;
+import com.serenegiant.usb.CameraDialog;
+import com.serenegiant.usb.IFrameCallback;
+import com.serenegiant.usb.USBMonitor;
+import com.serenegiant.usb.UVCCamera;
+import com.serenegiant.widget.UVCCameraTextureView;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -64,6 +70,8 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
     // Glass display dimensions optimized for prism display
     private static final int GLASS_WIDTH = 640;
     private static final int GLASS_HEIGHT = 360;
+
+    private static final int MENU_REQUEST_CODE = 100;
 
     // Thermal imaging constants
     private boolean mThermalMode = false;
@@ -85,18 +93,32 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
     private UVCCamera mUVCCamera;
     private UVCCameraTextureView mUVCCameraView;
     private Surface mPreviewSurface;
+    private boolean mIsRecording = false;
 
     // Glass UI components
-    private TextView mStatusText;
-    private TextView mTemperatureText;
     private ImageView mThermalOverlay;
     private GestureDetector mGestureDetector;
     private Toast mToast;
+    private String mStatusText = "";
+    private String mTemperatureText = null;
 
-    // Glass gestures
-    private static final int GESTURE_TAP = 1;
-    private static final int GESTURE_TWO_FINGER_TAP = 2;
-    private static final int GESTURE_SWIPE_DOWN = 3;
+    // GPS location tracking
+    private LocationManager mLocationManager;
+    private Location mLastLocation;
+    private boolean mGpsEnabled = true;
+    private final LocationListener mLocationListener = new LocationListener() {
+        @Override
+        public void onLocationChanged(final Location location) {
+            mLastLocation = location;
+            if (DEBUG) Log.v(TAG, "Location updated: " + location);
+        }
+        @Override
+        public void onStatusChanged(String provider, int status, Bundle extras) {}
+        @Override
+        public void onProviderEnabled(String provider) {}
+        @Override
+        public void onProviderDisabled(String provider) {}
+    };
 
     // Background processing
     private ExecutorService mThermalProcessingExecutor;
@@ -108,11 +130,17 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
 
         if (DEBUG) Log.v(TAG, "onCreate");
 
+        // Start the LiveCard service
+        startService(new Intent(this, LiveCardService.class));
+
         // Initialize Glass UI components
         initializeGlassUI();
 
         // Initialize USB camera components
         initializeCamera();
+
+        // Initialize location services
+        initializeLocationServices();
 
         // Setup Glass gesture detection
         setupGestureDetection();
@@ -124,10 +152,34 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         mThermalProcessingExecutor = Executors.newSingleThreadExecutor();
     }
 
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent event) {
+        if (mGestureDetector != null) {
+            return mGestureDetector.onMotionEvent(event);
+        }
+        return super.onGenericMotionEvent(event);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == MENU_REQUEST_CODE && resultCode == RESULT_OK && data != null) {
+            mThermalMode = data.getBooleanExtra(MenuActivity.EXTRA_THERMAL_MODE, mThermalMode);
+            mGpsEnabled = data.getBooleanExtra(MenuActivity.EXTRA_GPS_ENABLED, mGpsEnabled);
+            mThermalPalette = data.getIntExtra(MenuActivity.EXTRA_PALETTE, mThermalPalette);
+
+            if (data.getBooleanExtra(MenuActivity.EXTRA_TOGGLE_RECORDING, false)) {
+                toggleRecording();
+            }
+
+            // Apply settings
+            updateUiForThermalMode();
+            updateLocationListenerState();
+        }
+        super.onActivityResult(requestCode, resultCode, data);
+    }
+
     private void initializeGlassUI() {
         mUVCCameraView = (UVCCameraTextureView) findViewById(R.id.UVCCameraTextureView1);
-        mStatusText = (TextView) findViewById(R.id.status_text);
-        mTemperatureText = (TextView) findViewById(R.id.temperature_text);
         mThermalOverlay = (ImageView) findViewById(R.id.thermal_overlay);
 
         // Configure for Glass display (640x360)
@@ -142,40 +194,51 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         mUSBMonitor = new USBMonitor(this, mOnDeviceConnectListener);
     }
 
+    private void initializeLocationServices() {
+        mLocationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
+    }
+
     private void setupGestureDetection() {
-        mGestureDetector = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+        mGestureDetector = new GestureDetector(this);
+        mGestureDetector.setBaseListener(new GestureDetector.BaseListener() {
             @Override
-            public boolean onSingleTapConfirmed(MotionEvent e) {
-                if (DEBUG) Log.v(TAG, "Single tap - measure temperature");
-                measureCenterTemperature();
-                return true;
-            }
-
-            @Override
-            public boolean onDoubleTap(MotionEvent e) {
-                if (DEBUG) Log.v(TAG, "Double tap - toggle thermal mode");
-                toggleThermalMode();
-                return true;
-            }
-
-            @Override
-            public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
-                if (e2.getY() - e1.getY() > 100) { // Swipe down - fixed logic
-                    if (DEBUG) Log.v(TAG, "Swipe down - capture image");
+            public boolean onGesture(Gesture gesture) {
+                if (gesture == Gesture.TAP) {
+                    if (DEBUG) Log.v(TAG, "TAP: Open settings menu");
+                    openOptionsMenu();
+                    return true;
+                } else if (gesture == Gesture.TWO_TAP) {
+                    if (DEBUG) Log.v(TAG, "TWO_TAP: Take picture");
                     captureImage();
+                    return true;
+                } else if (gesture == Gesture.THREE_TAP) {
+                    if (DEBUG) Log.v(TAG, "THREE_TAP: Toggle recording");
+                    toggleRecording();
+                    return true;
+                } else if (gesture == Gesture.SWIPE_RIGHT) {
+                    if (DEBUG) Log.v(TAG, "SWIPE_RIGHT: Cycle thermal palette");
+                    cyclePalette();
+                    return true;
+                } else if (gesture == Gesture.SWIPE_LEFT) {
+                    if (DEBUG) Log.v(TAG, "SWIPE_LEFT: Measure temperature");
+                    measureCenterTemperature();
+                    return true;
+                } else if (gesture == Gesture.SWIPE_DOWN) {
+                    if (DEBUG) Log.v(TAG, "SWIPE_DOWN: Exit");
+                    finish();
                     return true;
                 }
                 return false;
             }
         });
+    }
 
-        // Set touch listener for the entire view
-        findViewById(android.R.id.content).setOnTouchListener(new View.OnTouchListener() {
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                return mGestureDetector.onTouchEvent(event);
-            }
-        });
+    private void openOptionsMenu() {
+        Intent intent = new Intent(this, MenuActivity.class);
+        intent.putExtra(MenuActivity.EXTRA_THERMAL_MODE, mThermalMode);
+        intent.putExtra(MenuActivity.EXTRA_GPS_ENABLED, mGpsEnabled);
+        intent.putExtra(MenuActivity.EXTRA_PALETTE, mThermalPalette);
+        startActivityForResult(intent, MENU_REQUEST_CODE);
     }
 
     private void createCaptureDirectory() {
@@ -195,11 +258,22 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                 mUVCCamera.startPreview();
             }
         }
+        updateLocationListenerState();
     }
 
     @Override
     protected void onStop() {
         if (DEBUG) Log.v(TAG, "onStop");
+        if (mLocationManager != null) {
+            try {
+                mLocationManager.removeUpdates(mLocationListener);
+            } catch (SecurityException e) {
+                Log.e(TAG, "Could not remove location updates", e);
+            }
+        }
+        if (mIsRecording) {
+            stopRecording();
+        }
         synchronized (mSync) {
             if (mUVCCamera != null) {
                 mUVCCamera.stopPreview();
@@ -214,6 +288,7 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
     @Override
     protected void onDestroy() {
         if (DEBUG) Log.v(TAG, "onDestroy");
+        stopService(new Intent(this, LiveCardService.class));
         synchronized (mSync) {
             releaseCamera();
         }
@@ -235,22 +310,17 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
     // Glass thermal imaging functions
     private void measureCenterTemperature() {
         float temperature = readCenterTemperatureFromThermalData();
+        mTemperatureText = String.format("Center: ~%.1f°C", temperature);
+        generateThermalOverlayAsync();
 
-        runOnUiThread(new Runnable() {
+        // Hide temperature after 3 seconds
+        new Handler().postDelayed(new Runnable() {
             @Override
             public void run() {
-                mTemperatureText.setText(String.format("Center: ~%.1f°C", temperature));
-                mTemperatureText.setVisibility(View.VISIBLE);
-
-                // Hide temperature after 3 seconds
-                mTemperatureText.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        mTemperatureText.setVisibility(View.GONE);
-                    }
-                }, 3000);
+                mTemperatureText = null;
+                generateThermalOverlayAsync();
             }
-        });
+        }, 3000);
 
         if (DEBUG) Log.v(TAG, "Center temperature: " + temperature + "°C");
     }
@@ -299,31 +369,48 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
 
     private void toggleThermalMode() {
         mThermalMode = !mThermalMode;
+        updateUiForThermalMode();
+    }
 
+    private void cyclePalette() {
         if (mThermalMode) {
             mThermalPalette = (mThermalPalette + 1) % 3; // Cycle through palettes
+            updateUiForThermalMode();
+        }
+    }
+
+    private void updateUiForThermalMode() {
+        if (mThermalMode) {
             enableRawThermalData();
         } else {
             disableRawThermalData();
         }
 
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                String status = mThermalMode ?
-                    "Thermal Mode: " + getPaletteName() :
-                    "Normal Mode";
-                updateStatusText(status);
+        String status = mThermalMode ?
+            "Thermal Mode: " + getPaletteName() :
+            "Normal Mode";
+        updateStatusText(status);
 
-                if (mThermalMode) {
-                    generateThermalOverlayAsync();
-                } else {
-                    mThermalOverlay.setVisibility(View.GONE);
-                }
-            }
-        });
+        if (mThermalMode) {
+            generateThermalOverlayAsync();
+        } else {
+            mThermalOverlay.setVisibility(View.GONE);
+        }
 
         if (DEBUG) Log.v(TAG, "Thermal mode: " + mThermalMode + ", palette: " + mThermalPalette);
+    }
+
+    private void updateLocationListenerState() {
+        if (mLocationManager == null) return;
+        try {
+            if (mGpsEnabled) {
+                mLocationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000, 10, mLocationListener);
+            } else {
+                mLocationManager.removeUpdates(mLocationListener);
+            }
+        } catch (SecurityException e) {
+            Log.e(TAG, "No permission to access location", e);
+        }
     }
 
     private void enableRawThermalData() {
@@ -392,6 +479,17 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
 
         synchronized (mThermalLock) {
             if (mLatestThermalFrame == null || !mRawDataEnabled) {
+                // If no thermal data, create a blank bitmap for status text
+                Bitmap emptyBitmap = Bitmap.createBitmap(GLASS_WIDTH, GLASS_HEIGHT, Bitmap.Config.ARGB_8888);
+                Canvas canvas = new Canvas(emptyBitmap);
+                drawStatusText(canvas, mStatusText);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        mThermalOverlay.setImageBitmap(emptyBitmap);
+                        mThermalOverlay.setVisibility(View.VISIBLE);
+                    }
+                });
                 return;
             }
 
@@ -410,20 +508,12 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                     Bitmap thermalBitmap = createThermalBitmapWithAutoContrast(thermalDataCopy, width, height, palette);
 
                     if (thermalBitmap != null) {
-                        // Draw center reticle
                         Canvas canvas = new Canvas(thermalBitmap);
-                        Paint paint = new Paint();
-                        paint.setColor(Color.WHITE);
-                        paint.setStrokeWidth(2.0f);
-                        paint.setAntiAlias(true);
-
-                        int centerX = thermalBitmap.getWidth() / 2;
-                        int centerY = thermalBitmap.getHeight() / 2;
-                        int crossSize = 20;
-
-                        // Draw crosshair
-                        canvas.drawLine(centerX - crossSize, centerY, centerX + crossSize, centerY, paint);
-                        canvas.drawLine(centerX, centerY - crossSize, centerX, centerY + crossSize, paint);
+                        drawCrosshair(canvas);
+                        drawStatusText(canvas, mStatusText);
+                        if (mTemperatureText != null) {
+                            drawTemperatureText(canvas, mTemperatureText);
+                        }
 
                         // Update UI on main thread
                         runOnUiThread(new Runnable() {
@@ -441,6 +531,39 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                 }
             }
         });
+    }
+
+    private void drawCrosshair(Canvas canvas) {
+        Paint paint = new Paint();
+        paint.setColor(Color.WHITE);
+        paint.setStrokeWidth(2.0f);
+        paint.setAntiAlias(true);
+
+        int centerX = canvas.getWidth() / 2;
+        int centerY = canvas.getHeight() / 2;
+        int crossSize = 20;
+
+        // Draw crosshair
+        canvas.drawLine(centerX - crossSize, centerY, centerX + crossSize, centerY, paint);
+        canvas.drawLine(centerX, centerY - crossSize, centerX, centerY + crossSize, paint);
+    }
+
+    private void drawStatusText(Canvas canvas, String text) {
+        Paint paint = new Paint();
+        paint.setColor(Color.WHITE);
+        paint.setTextSize(24);
+        paint.setAntiAlias(true);
+        paint.setTextAlign(Paint.Align.CENTER);
+        canvas.drawText(text, canvas.getWidth() / 2, 30, paint);
+    }
+
+    private void drawTemperatureText(Canvas canvas, String text) {
+        Paint paint = new Paint();
+        paint.setColor(Color.YELLOW);
+        paint.setTextSize(32);
+        paint.setAntiAlias(true);
+        paint.setTextAlign(Paint.Align.CENTER);
+        canvas.drawText(text, canvas.getWidth() / 2, canvas.getHeight() / 2, paint);
     }
 
     private Bitmap createThermalBitmapWithAutoContrast(byte[] thermalData, int width, int height, int palette) {
@@ -630,14 +753,21 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                 File metaFile = new File(dir, metaFilename);
                 FileOutputStream metaOut = new FileOutputStream(metaFile);
 
+                String locationString = "N/A";
+                if (mGpsEnabled && mLastLocation != null) {
+                    locationString = String.format("%.6f, %.6f", mLastLocation.getLatitude(), mLastLocation.getLongitude());
+                }
+
                 String metadata = String.format(
                     "Timestamp: %d\n" +
+                    "GPS Location: %s\n" +
                     "Thermal Mode: %s\n" +
                     "Palette: %s\n" +
                     "Center Temperature: %.1f°C\n" +
                     "Data Size: %d bytes\n" +
                     "Format: Y16 (16-bit raw thermal)\n",
                     timestamp,
+                    locationString,
                     mThermalMode ? "Enabled" : "Disabled",
                     getPaletteName(),
                     readCenterTemperatureFromThermalData(),
@@ -654,15 +784,66 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         }
     }
 
-    private void updateStatusText(final String status) {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                if (mStatusText != null) {
-                    mStatusText.setText(status);
+    private void toggleRecording() {
+        if (mIsRecording) {
+            stopRecording();
+        } else {
+            startRecording();
+        }
+    }
+
+    private void startRecording() {
+        if (DEBUG) Log.v(TAG, "startRecording");
+        synchronized (mSync) {
+            if (mUVCCamera != null) {
+                try {
+                    final String path = getVideoFilePath();
+                    mUVCCamera.startCapture(path);
+                    mIsRecording = true;
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            updateStatusText("Recording...");
+                            Toast.makeText(MainActivity.this, "Recording started", Toast.LENGTH_SHORT).show();
+                        }
+                    });
+                } catch (IOException e) {
+                    Log.e(TAG, "Failed to start recording", e);
+                    mIsRecording = false;
                 }
             }
-        });
+        }
+    }
+
+    private void stopRecording() {
+        if (DEBUG) Log.v(TAG, "stopRecording");
+        synchronized (mSync) {
+            if (mUVCCamera != null && mIsRecording) {
+                mUVCCamera.stopCapture();
+                mIsRecording = false;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        updateStatusText("Recording stopped");
+                        Toast.makeText(MainActivity.this, "Recording stopped", Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        }
+    }
+
+    private String getVideoFilePath() throws IOException {
+        final File dir = new File(Environment.getExternalStorageDirectory(), "flir-boson");
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        final String timestamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date());
+        return new File(dir, "thermal_video_" + timestamp + ".mp4").getAbsolutePath();
+    }
+
+    private void updateStatusText(final String status) {
+        mStatusText = status;
+        generateThermalOverlayAsync();
     }
 
     // USB camera connection handling
@@ -716,7 +897,7 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
-                            updateStatusText("FLIR Boson Active - Tap: Temp, Double-tap: Mode, Swipe: Capture");
+                            updateStatusText("FLIR Boson Active - Tap for Menu");
                         }
                     });
 

@@ -37,11 +37,7 @@ fi
 java_version=$(java -version 2>&1 | head -n 1)
 echo "Using Java: $java_version"
 
-# Check Gradle
-if ! gradle -v &>/dev/null; then
-    echo "Error: Gradle not found. Install with: pkg install gradle"
-    exit 1
-fi
+
 
 # Check Android SDK
 if [ ! -d "$ANDROID_HOME" ]; then
@@ -104,7 +100,7 @@ if [ ! -f "local.properties" ]; then
 fi
 
 echo "Step 3: Cleaning previous builds..."
-./gradlew clean || {
+JAVA_HOME=/data/data/com.termux/files/usr/lib/jvm/java-17-openjdk ./gradlew clean || {
     echo "Warning: Clean failed, continuing anyway..."
 }
 
@@ -141,7 +137,7 @@ fi
 echo "This may take a few minutes on first run..."
 
 # Build with Termux-specific configuration (optimized for Glass/API 19)
-./gradlew $GRADLE_TASK \
+JAVA_HOME=/data/data/com.termux/files/usr/lib/jvm/java-17-openjdk ./gradlew $GRADLE_TASK \
     -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=512m" \
     -Pandroid.aapt2FromMavenOverride="$AAPT2_PATH" \
     --no-daemon \
