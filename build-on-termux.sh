@@ -2,6 +2,15 @@
 
 echo "Building APK for Google Glass XE24 with FLIR UVC-Boson support..."
 
+# Set up Termux-specific environment
+echo "Configuring for Termux build environment..."
+if [ -f "gradle-termux.properties" ]; then
+    cp gradle-termux.properties gradle.properties
+    echo "✅ Applied Termux-specific gradle properties"
+else
+    echo "❌ gradle-termux.properties not found"
+fi
+
 BUILD_TYPE="${1:-debug}"
 BUILD_TYPE_LOWER=$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')
 

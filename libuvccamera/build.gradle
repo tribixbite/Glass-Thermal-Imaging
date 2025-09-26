@@ -53,11 +53,17 @@ android {
 	}
 }
 
-// Temporarily disable NDK build due to aarch64 host compatibility issues
-// TODO: Enable when cross-compilation is set up properly for Termux
-// tasks.withType(JavaCompile) {
-//	compileTask -> compileTask.dependsOn ndkBuild
-// }
+// Conditionally enable NDK build based on environment
+// Disabled on Termux aarch64 hosts due to compatibility issues
+// Enabled on GitHub Actions x86_64 runners with proper cross-compilation
+if (System.getenv("CI") == "true" || !System.getProperty("os.arch").contains("aarch64")) {
+	tasks.withType(JavaCompile) {
+		compileTask -> compileTask.dependsOn ndkBuild
+	}
+	println "✅ NDK build enabled for ${System.getProperty('os.arch')} architecture"
+} else {
+	println "⚠️ NDK build disabled on aarch64 host (Termux compatibility)"
+}
 
 String getNdkBuildPath() {
 	Properties properties = new Properties()

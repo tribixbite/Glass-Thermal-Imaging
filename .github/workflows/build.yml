@@ -61,12 +61,12 @@ jobs:
         echo "NDK_ROOT=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
         echo "ndk.dir=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> local.properties
 
-    - name: Enable NDK build in libuvccamera
+    - name: Verify NDK build will be enabled
       run: |
-        # Re-enable NDK build that was disabled for Termux aarch64 compatibility
-        sed -i 's|// tasks.withType(JavaCompile) {|tasks.withType(JavaCompile) {|' libuvccamera/build.gradle
-        sed -i 's|//\s*compileTask -> compileTask.dependsOn ndkBuild|	compileTask -> compileTask.dependsOn ndkBuild|' libuvccamera/build.gradle
-        sed -i 's|// }|}|' libuvccamera/build.gradle
+        # NDK build is now conditionally enabled based on CI environment
+        echo "CI environment detected, NDK build will be automatically enabled"
+        echo "Architecture: $(uname -m)"
+        echo "CI variable: $CI"
 
     - name: Configure Android NDK for cross-compilation
       run: |
