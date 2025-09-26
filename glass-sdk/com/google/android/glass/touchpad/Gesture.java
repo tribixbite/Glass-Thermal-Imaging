@@ -1,0 +1,22 @@
+package com.google.android.glass.touchpad;
+
+public enum Gesture {
+    TAP,
+    TWO_FINGER_TAP,
+    TWO_TAP,
+    THREE_TAP,
+    THREE_FINGER_TAP,
+    SWIPE_LEFT,
+    SWIPE_RIGHT,
+    SWIPE_UP,
+    SWIPE_DOWN,
+    TWO_FINGER_SWIPE_LEFT,
+    TWO_FINGER_SWIPE_RIGHT,
+    TWO_FINGER_SWIPE_UP,
+    TWO_FINGER_SWIPE_DOWN,
+    LONG_PRESS,
+    SCROLL,
+    THREE_FINGER_LONG_PRESS,
+    DOUBLE_TAP,
+    TWO_FINGER_DOUBLE_TAP
+}

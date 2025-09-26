@@ -53,8 +53,8 @@ android {
 	}
 }
 
-// Temporarily disable NDK build for basic APK creation
-// TODO: Re-enable NDK build for full camera functionality
+// Temporarily disable NDK build due to aarch64 host compatibility issues
+// TODO: Enable when cross-compilation is set up properly for Termux
 // tasks.withType(JavaCompile) {
 //	compileTask -> compileTask.dependsOn ndkBuild
 // }
@@ -84,15 +84,14 @@ task ndkClean(type: Exec, description: 'clean JNI libraries') {
 	commandLine ndkBuildPath, 'clean', '-C', file('src/main').absolutePath
 }
 
-// Temporarily disable NDK clean for basic APK creation
-// TODO: Re-enable NDK clean for full camera functionality
+// Temporarily disable NDK clean due to aarch64 host compatibility issues
 // clean.dependsOn 'ndkClean'
 
 dependencies {
     implementation fileTree(dir: new File(buildDir, 'libs'), include: '*.jar')
 	implementation "com.android.support:support-annotations:${supportLibVersion}"
-	// Use known working version compatible with API 19
-	implementation("com.serenegiant:common:1.1.1") {
+	// Use version 1.2.0 which has string resources but no vector drawables
+	implementation("com.serenegiant:common:1.2.0") {
 		exclude module: 'support-v4'
 	}
 }

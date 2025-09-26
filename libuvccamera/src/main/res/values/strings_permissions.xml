@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Permission strings for Glass compatibility -->
+    <string name="permission_title">Permissions Required</string>
+    <string name="permission_audio">Audio recording permission required</string>
+    <string name="permission_ext_storage">External storage permission required</string>
+    <string name="permission_network">Network permission required</string>
+    <string name="permission_camera">Camera permission required</string>
+
+    <string name="permission_audio_recording_request">This app needs audio recording permission to record with thermal camera</string>
+    <string name="permission_ext_storage_request">This app needs storage permission to save thermal images</string>
+    <string name="permission_network_request">This app needs network permission for data sharing</string>
+    <string name="permission_camera_request">This app needs camera permission for thermal imaging</string>
+</resources>

@@ -62,6 +62,6 @@ dependencies {
     implementation project(':usbCameraCommon')
     implementation project(':libuvccamera')
 
-    // Glass SDK classes will be available on Glass platform at runtime
-    // compileOnly files('libs/glass-api-stub.jar')
+    // Glass SDK classes for development - will be available on Glass platform at runtime
+    compileOnly files('libs/glass-api.jar')
 }
