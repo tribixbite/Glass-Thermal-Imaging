@@ -24,7 +24,7 @@
 apply plugin: 'com.android.application'
 
 android {
-	compileSdkVersion versionCompiler
+	compileSdkVersion 19
 	buildToolsVersion versionBuildTool
 	namespace 'com.flir.boson.glass'  // Required for modern AGP
 
@@ -44,6 +44,9 @@ android {
         manifestPlaceholders = [
             glassUsbHost: 'true'
         ]
+
+        // Support for vector drawables in API 19
+        vectorDrawables.useSupportLibrary = true
     }
 
     buildTypes {
@@ -58,4 +61,7 @@ dependencies {
     // Restore UVC camera dependencies for full functionality
     implementation project(':usbCameraCommon')
     implementation project(':libuvccamera')
+
+    // Glass SDK classes will be available on Glass platform at runtime
+    // compileOnly files('libs/glass-api-stub.jar')
 }

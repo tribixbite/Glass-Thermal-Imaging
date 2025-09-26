@@ -53,10 +53,11 @@ android {
 	}
 }
 
-// Re-enable NDK build for full camera functionality
-tasks.withType(JavaCompile) {
-	compileTask -> compileTask.dependsOn ndkBuild
-}
+// Temporarily disable NDK build for basic APK creation
+// TODO: Re-enable NDK build for full camera functionality
+// tasks.withType(JavaCompile) {
+//	compileTask -> compileTask.dependsOn ndkBuild
+// }
 
 String getNdkBuildPath() {
 	Properties properties = new Properties()
@@ -83,13 +84,15 @@ task ndkClean(type: Exec, description: 'clean JNI libraries') {
 	commandLine ndkBuildPath, 'clean', '-C', file('src/main').absolutePath
 }
 
-// Re-enable NDK clean for full camera functionality
-clean.dependsOn 'ndkClean'
+// Temporarily disable NDK clean for basic APK creation
+// TODO: Re-enable NDK clean for full camera functionality
+// clean.dependsOn 'ndkClean'
 
 dependencies {
     implementation fileTree(dir: new File(buildDir, 'libs'), include: '*.jar')
 	implementation "com.android.support:support-annotations:${supportLibVersion}"
-	implementation("com.serenegiant:common:${commonLibVersion}") {
+	// Use known working version compatible with API 19
+	implementation("com.serenegiant:common:1.1.1") {
 		exclude module: 'support-v4'
 	}
 }

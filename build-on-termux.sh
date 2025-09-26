@@ -14,7 +14,7 @@ fi
 
 # Set environment variables for Termux
 if [ -z "$JAVA_HOME" ]; then
-    export JAVA_HOME=/data/data/com.termux/files/usr
+    export JAVA_HOME=/data/data/com.termux/files/usr/lib/jvm/java-21-openjdk
     export PATH=$PATH:$JAVA_HOME/bin
 fi
 
