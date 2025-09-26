@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.os.IBinder;
 import android.widget.RemoteViews;
 
+import com.flir.boson.glass.R;
 import com.google.android.glass.timeline.LiveCard;
 import com.google.android.glass.timeline.LiveCard.PublishMode;
 

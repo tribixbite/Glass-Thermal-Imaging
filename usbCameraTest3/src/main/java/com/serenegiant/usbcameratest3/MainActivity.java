@@ -43,11 +43,14 @@ import android.view.Surface;
 import android.view.View;
 import android.widget.ImageView;
 import android.widget.Toast;
+import java.util.List;
 
 import com.flir.boson.glass.R;
 import com.google.android.glass.touchpad.Gesture;
 import com.google.android.glass.touchpad.GestureDetector;
 import com.serenegiant.usb.CameraDialog;
+import com.serenegiant.usb.USBMonitor.OnDeviceConnectListener;
+import com.serenegiant.usb.UsbControlBlock;
 import com.serenegiant.usb.IFrameCallback;
 import com.serenegiant.usb.USBMonitor;
 import com.serenegiant.usb.UVCCamera;
@@ -233,7 +236,7 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         });
     }
 
-    private void openOptionsMenu() {
+    public void openOptionsMenu() {
         Intent intent = new Intent(this, MenuActivity.class);
         intent.putExtra(MenuActivity.EXTRA_THERMAL_MODE, mThermalMode);
         intent.putExtra(MenuActivity.EXTRA_GPS_ENABLED, mGpsEnabled);
@@ -798,7 +801,7 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
             if (mUVCCamera != null) {
                 try {
                     final String path = getVideoFilePath();
-                    mUVCCamera.startCapture(path);
+                    mUVCCamera.startCapture(new Surface(mUVCCameraView.getSurfaceTexture()));
                     mIsRecording = true;
                     runOnUiThread(new Runnable() {
                         @Override
@@ -861,7 +864,7 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         }
 
         @Override
-        public void onConnect(final UsbDevice device, final UsbControlBlock ctrlBlock, final boolean createNew) {
+        public void onConnect(final UsbDevice device, final USBMonitor.UsbControlBlock ctrlBlock, final boolean createNew) {
             if (DEBUG) Log.v(TAG, "onConnect:" + device);
             synchronized (mSync) {
                 releaseCamera();
@@ -880,7 +883,7 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                         // These may be different from display dimensions
                         synchronized (mThermalLock) {
                             // Check actual supported sizes to determine thermal frame dimensions
-                            String sizeList = mUVCCamera.getSupportedSizeList();
+                            String sizeList = mUVCCamera.getSupportedSizeList().toString();
                             if (sizeList != null && sizeList.contains("320x256")) {
                                 mThermalFrameWidth = 320;
                                 mThermalFrameHeight = 256;
@@ -909,7 +912,7 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         }
 
         @Override
-        public void onDisconnect(final UsbDevice device, final UsbControlBlock ctrlBlock) {
+        public void onDisconnect(final UsbDevice device, final USBMonitor.UsbControlBlock ctrlBlock) {
             if (DEBUG) Log.v(TAG, "onDisconnect:" + device);
             synchronized (mSync) {
                 if (mUVCCamera != null && device.equals(mUVCCamera.getDevice())) {
