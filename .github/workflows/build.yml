@@ -9,7 +9,7 @@ on:
 
 env:
   JAVA_VERSION: '21'
-  NDK_VERSION: '26.1.10909125'
+  NDK_VERSION: '21.4.7075529'
 
 jobs:
   build:
@@ -32,9 +32,10 @@ jobs:
         target: android-19
         arch: x86_64
 
-    - name: Install Android NDK
+    - name: Install older NDK with API 19 support
       run: |
-        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;${{ env.NDK_VERSION }}"
+        # Use NDK r21e which still supports android-19
+        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;21.4.7075529"
 
     - name: Cache Gradle dependencies
       uses: actions/cache@v4
@@ -86,7 +87,7 @@ jobs:
         # Build NDK libraries first
         cd libuvccamera/src/main/jni
         $ANDROID_NDK_HOME/ndk-build clean
-        $ANDROID_NDK_HOME/ndk-build APP_ABI="armeabi-v7a" APP_PLATFORM=android-21
+        $ANDROID_NDK_HOME/ndk-build APP_ABI="armeabi-v7a" APP_PLATFORM=android-19
         cd ../../../..
 
     - name: Build debug APK
