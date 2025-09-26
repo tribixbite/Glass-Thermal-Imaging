@@ -81,7 +81,7 @@ jobs:
       run: |
         cd libuvccamera/src/main/jni
         $ANDROID_NDK_HOME/ndk-build clean
-        $ANDROID_NDK_HOME/ndk-build APP_ABI="armeabi-v7a arm64-v8a" APP_PLATFORM=android-19 APP_OPTIM=release
+        $ANDROID_NDK_HOME/ndk-build APP_ABI="armeabi-v7a" APP_PLATFORM=android-21 APP_OPTIM=release
         cd ../../../..
 
     - name: Build release APK
