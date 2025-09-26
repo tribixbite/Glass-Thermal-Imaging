@@ -57,11 +57,18 @@ jobs:
           curl -L https://github.com/gradle/gradle/raw/v7.6.0/gradle/wrapper/gradle-wrapper.jar -o gradle/wrapper/gradle-wrapper.jar
         fi
 
-    - name: Set up NDK environment
+    - name: Set up NDK environment and clean Termux configs
       run: |
+        # Use CI-specific gradle properties instead of Termux ones
+        cp gradle-ci.properties gradle.properties
+
+        # Create clean local.properties for CI
+        echo "sdk.dir=$ANDROID_HOME" > local.properties
+        echo "ndk.dir=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> local.properties
+
+        # Set environment variables
         echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
         echo "NDK_ROOT=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
-        echo "ndk.dir=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> local.properties
 
     - name: Verify NDK build for release
       run: |
