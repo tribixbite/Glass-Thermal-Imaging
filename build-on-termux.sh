@@ -1,15 +1,9 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/bin/bash
 
-# Complete build script for FLIR UVC-Boson Glass on Termux ARM64
-# This script handles all the compatibility issues for Glass thermal imaging
-# Usage: ./build-on-termux.sh [debug|release]
+echo "Building APK for Google Glass XE24 with FLIR UVC-Boson support..."
 
 BUILD_TYPE="${1:-debug}"
 BUILD_TYPE_LOWER=$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')
-
-echo "=== FLIR UVC-Boson Glass Termux Build Script ==="
-echo "Building $BUILD_TYPE_LOWER APK for Glass XE24 Thermal Imaging on Termux ARM64"
-echo
 
 # Validate build type
 if [[ "$BUILD_TYPE_LOWER" != "debug" && "$BUILD_TYPE_LOWER" != "release" ]]; then
@@ -18,198 +12,84 @@ if [[ "$BUILD_TYPE_LOWER" != "debug" && "$BUILD_TYPE_LOWER" != "release" ]]; the
     exit 1
 fi
 
-# 1. Set up environment for Glass (requires older Java for API 19 compatibility)
-export ANDROID_HOME="$HOME/android-sdk"
-export ANDROID_SDK_ROOT="$ANDROID_HOME"
-export JAVA_HOME="/data/data/com.termux/files/usr/lib/jvm/java-17-openjdk"
-export PATH="$JAVA_HOME/bin:/data/data/com.termux/files/usr/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/34.0.0:$PATH"
-
-echo "Step 1: Checking prerequisites..."
-
-# Check Java (using Java 21 for modern build tools, but APK targets API 19)
-if ! java -version &>/dev/null; then
-    echo "Error: Java not found. Install with: pkg install gradle (includes Java 21)"
-    echo "Note: Java 21 is used for build tools, APK will still target Glass XE24 (API 19)"
-    exit 1
+# Set environment variables for Termux
+if [ -z "$JAVA_HOME" ]; then
+    export JAVA_HOME=/data/data/com.termux/files/usr
+    export PATH=$PATH:$JAVA_HOME/bin
 fi
 
-# Show Java version being used
-java_version=$(java -version 2>&1 | head -n 1)
-echo "Using Java: $java_version"
+if [ -z "$ANDROID_HOME" ]; then
+    export ANDROID_HOME=/data/data/com.termux/files/usr/share/android-sdk
+    export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
+    export PATH=$PATH:$ANDROID_HOME/platform-tools
+fi
 
-
-
-# Check Android SDK
+# Verify environment
+echo "Java version:"
+java -version
+echo ""
+echo "Android SDK location: $ANDROID_HOME"
 if [ ! -d "$ANDROID_HOME" ]; then
-    echo "Error: Android SDK not found at $ANDROID_HOME"
-    echo "Please install Android SDK with API 19 (KitKat) for Glass support"
+    echo "❌ Android SDK not found at $ANDROID_HOME"
+    echo "Please install Android SDK: pkg install android-sdk"
     exit 1
 fi
+echo ""
 
-# Check if build-tools exist
-if [ ! -d "$ANDROID_HOME/build-tools/34.0.0" ]; then
-    echo "Warning: Build tools 34.0.0 not found. Using latest available..."
-    # Find latest build tools
-    LATEST_BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -type d -name "*.*.*" | sort -V | tail -n1)
-    if [ -n "$LATEST_BUILD_TOOLS" ]; then
-        BUILD_TOOLS_VERSION=$(basename "$LATEST_BUILD_TOOLS")
-        export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION:$PATH"
-        echo "Using build tools version: $BUILD_TOOLS_VERSION"
-    else
-        echo "Error: No build tools found in Android SDK"
-        exit 1
-    fi
-fi
-
-# Check qemu-x86_64 for AAPT2 wrapper
-if ! command -v qemu-x86_64 &>/dev/null; then
-    echo "Error: qemu-x86_64 not found. Install with: pkg install qemu-user-x86-64"
-    echo "Required for patched AAPT2 to work on Termux ARM64"
-    exit 1
-fi
-
-# Check for patched AAPT2 for Termux compatibility
-AAPT2_PATH="$(pwd)/tools/aapt2"
-if [ -f "$AAPT2_PATH" ]; then
-    echo "Found patched AAPT2 for Termux at: $AAPT2_PATH"
-    # Make sure it's executable
-    chmod +x "$AAPT2_PATH"
-else
-    echo "Error: Patched AAPT2 not found at $AAPT2_PATH"
-    echo "Termux requires patched AAPT2 for Android builds"
-    exit 1
-fi
-
-echo "Step 2: Checking project structure..."
-
-# Verify we're in the right directory
+# Check project structure and determine target app
+echo "Checking project structure..."
 if [ ! -f "usbCameraTest3/build.gradle" ]; then
-    echo "Error: Not in UVC-Boson project root (usbCameraTest3/build.gradle not found)"
+    echo "❌ usbCameraTest3/build.gradle not found. Not in UVC-Boson project root?"
     exit 1
 fi
 
-# Check application ID matches UVC-Boson Glass project
-if ! grep -q "com.flir.boson.glass" usbCameraTest3/build.gradle; then
-    echo "Warning: Application ID might not match UVC-Boson Glass project"
-fi
+TARGET_MODULE="usbCameraTest3"
+echo "Building target module: $TARGET_MODULE"
 
-# Check if NDK is needed for native libraries
-if [ ! -f "local.properties" ]; then
-    echo "Warning: local.properties not found - NDK path may be needed for native libraries"
-    echo "Create local.properties with sdk.dir and ndk.dir if build fails"
-fi
-
-echo "Step 3: Cleaning previous builds..."
-JAVA_HOME=/data/data/com.termux/files/usr/lib/jvm/java-17-openjdk ./gradlew clean || {
-    echo "Warning: Clean failed, continuing anyway..."
-}
+# Clean previous builds
+echo "Cleaning previous builds..."
+./gradlew clean
 
 # Determine gradle task and output path
 if [ "$BUILD_TYPE_LOWER" = "release" ]; then
-    echo "Step 4: Building Release APK for Google Glass..."
-    echo "Note: Release builds require signing configuration."
-    echo "Creating a test signing key for release build..."
-
-    # Create a test keystore for release builds if not present
-    if [ ! -f "release.keystore" ]; then
-        keytool -genkey -v -keystore release.keystore -alias glassrelease \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=GlassAssistant, OU=Synople, O=Synople, L=Test, S=Test, C=US" 2>/dev/null || {
-            echo "Warning: Could not create release keystore"
-        }
-    fi
-
-    # Set environment variables for release signing
-    export RELEASE_KEYSTORE="release.keystore"
-    export RELEASE_KEYSTORE_PASSWORD="android"
-    export RELEASE_KEY_ALIAS="glassrelease"
-    export RELEASE_KEY_PASSWORD="android"
-
-    GRADLE_TASK=":usbCameraTest3:assembleRelease"
-    APK_PATH="usbCameraTest3/build/outputs/apk/release/usbCameraTest3-release.apk"
+    echo "Building release APK..."
+    GRADLE_TASK="${TARGET_MODULE}:assembleRelease"
+    APK_PATTERN="${TARGET_MODULE}/build/outputs/apk/release/*.apk"
 else
-    GRADLE_TASK=":usbCameraTest3:assembleDebug"
-    APK_PATH="usbCameraTest3/build/outputs/apk/debug/usbCameraTest3-debug.apk"
-    echo "Step 4: Building Debug APK for Glass Thermal Imaging..."
+    echo "Building debug APK..."
+    GRADLE_TASK="${TARGET_MODULE}:assembleDebug"
+    APK_PATTERN="${TARGET_MODULE}/build/outputs/apk/debug/*.apk"
 fi
 
-echo "This may take a few minutes on first run..."
+# Build APK
+echo "Building $BUILD_TYPE_LOWER APK..."
+./gradlew $GRADLE_TASK
 
-# Build with Termux-specific configuration (optimized for Glass/API 19)
-JAVA_HOME=/data/data/com.termux/files/usr/lib/jvm/java-17-openjdk ./gradlew $GRADLE_TASK \
-    -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=512m" \
-    -Pandroid.aapt2FromMavenOverride="$AAPT2_PATH" \
-    --no-daemon \
-    --warning-mode=none \
-    --console=plain \
-    --parallel \
-    --build-cache \
-    2>&1 | tee build-${BUILD_TYPE_LOWER}.log
-
-# Check build result
-if [ -f "$APK_PATH" ]; then
-    echo
-    echo "=== BUILD SUCCESSFUL! ==="
-    echo "FLIR UVC-Boson Glass APK created at: $APK_PATH"
-    echo
-    ls -lh "$APK_PATH"
-    echo
-
-    # Copy to /sdcard/flir-boson/ for easy updates
-    if [ "$BUILD_TYPE_LOWER" = "debug" ]; then
-        echo "Copying APK to /sdcard/flir-boson/ for updates..."
-        mkdir -p /sdcard/flir-boson
-        cp "$APK_PATH" /sdcard/flir-boson/flir-boson-glass-debug.apk
-        if [ -f "/sdcard/flir-boson/flir-boson-glass-debug.apk" ]; then
-            echo "APK copied to: /sdcard/flir-boson/flir-boson-glass-debug.apk"
-            ls -lh /sdcard/flir-boson/flir-boson-glass-debug.apk
-        else
-            echo "Warning: Failed to copy APK to /sdcard/flir-boson/"
-        fi
-    else
-        echo "Copying release APK to /sdcard/flir-boson/ for distribution..."
-        mkdir -p /sdcard/flir-boson
-        cp "$APK_PATH" /sdcard/flir-boson/flir-boson-glass-release.apk
-        if [ -f "/sdcard/flir-boson/flir-boson-glass-release.apk" ]; then
-            echo "APK copied to: /sdcard/flir-boson/flir-boson-glass-release.apk"
-            ls -lh /sdcard/flir-boson/flir-boson-glass-release.apk
-        fi
-    fi
-    
-    echo
-    echo "=== BUILD COMPLETE ==="
-    echo "To install on Google Glass manually:"
-    echo "  1. Copy APK to Glass device (via USB or file transfer)"
-    echo "  2. Enable 'Unknown sources' in Glass Settings → Device info → Turn on debug"
-    echo "  3. Install using: adb install -r <apk_path>"
-    echo "  4. Or use a file manager to open the APK"
-    echo
-    if [ "$BUILD_TYPE_LOWER" = "release" ]; then
-        echo "Note: Release APK uses test signing key. For production, use proper signing."
-    fi
-    echo "Thermal imaging on Glass notes:"
-    echo "  - Ensure Glass is in debug mode for sideloading"
-    echo "  - This APK is optimized for Glass XE24 (API 19/KitKat)"
-    echo "  - USB OTG required for FLIR Boson camera connection"
-    echo "  - External power may be needed for thermal camera"
-    echo "  - Thermal data visualization optimized for Glass display"
+# Check if build was successful
+if [ $? -eq 0 ]; then
+    echo ""
+    echo "✅ Build successful!"
+    echo ""
+    echo "APK location:"
+    find $TARGET_MODULE/build/outputs/apk -name "*.apk" -type f
+    echo ""
+    echo "To install on Google Glass:"
+    echo "1. Enable Developer Options on your Glass"
+    echo "2. Enable USB Debugging"
+    echo "3. Connect Glass via USB"
+    echo "4. Run: adb install <apk_path>"
+    echo ""
+    echo "For FLIR UVC-Boson thermal imaging:"
+    echo "- Ensure USB OTG adapter is connected"
+    echo "- FLIR Boson camera may require external power"
+    echo "- Check USB host permissions in app settings"
 else
-    echo
-    echo "=== BUILD FAILED ==="
-    echo "Check build-${BUILD_TYPE_LOWER}.log for details"
-    echo
+    echo "❌ Build failed. Please check the error messages above."
+    echo ""
     echo "Common issues:"
-    echo "1. AAPT2 compatibility - patched AAPT2 required for Termux"
-    echo "2. Memory issues - try closing other apps or reducing -Xmx value"
-    echo "3. Java version - Java 11 recommended for Glass/API 19 compatibility"
-    echo "4. SDK version mismatch - ensure API 19 is available in Android SDK"
-    echo "5. Missing dependencies - run './gradlew --refresh-dependencies'"
-    echo
-    echo "UVC-Boson Glass-specific issues:"
-    echo "- Ensure targetSdk = 19 in usbCameraTest3/build.gradle"
-    echo "- Native library build requires NDK (check local.properties)"
-    echo "- USB host permissions needed for thermal camera access"
-    echo "- Legacy libcommon repository may cause dependency issues"
+    echo "1. Missing Android SDK components"
+    echo "2. Java version compatibility"
+    echo "3. NDK not configured (needed for native libraries)"
+    echo "4. Gradle sync issues"
     exit 1
 fi
