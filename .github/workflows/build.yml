@@ -101,8 +101,21 @@ jobs:
 
         echo "✅ Cleared Gradle cache and verified common library version"
 
-    - name: Build debug APK
+    - name: Check dependency tree
       run: |
+        ./gradlew :usbCameraTest3:dependencies | grep -A5 -B5 "common" || echo "No common dependencies found"
+
+    - name: Build debug APK with force version
+      run: |
+        # Force the correct version by adding resolution strategy
+        cat >> libuvccamera/build.gradle << 'EOF'
+
+configurations.all {
+    resolutionStrategy {
+        force 'com.serenegiant:common:1.2.0'
+    }
+}
+EOF
         ./gradlew :usbCameraTest3:assembleDebug --stacktrace
 
     - name: Verify native libraries in APK
