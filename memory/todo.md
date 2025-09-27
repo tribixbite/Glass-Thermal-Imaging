@@ -121,15 +121,40 @@ These tasks optimize the app for Glass's limited hardware resources.
 5. **Permissions:** All required permissions granted (location, storage, audio)
 
 ### Immediate Issues to Address
-- [ ] **USB OTG Host Mode Activation:**
-    - USB subsystem shows only gadget mode (device mode) active
-    - Need to verify OTG adapter is connected properly
-    - May need to manually switch USB mode to host
+- [x] **USB OTG Host Mode Activation:**
+    - USB host mode confirmed working
+    - FLIR ONE camera successfully detected at /dev/bus/usb/001/002
+    - Device enumeration successful (VID: 0x09CB, PID: 0x1996)
 
-- [ ] **Test with FLIR Boson Camera:**
-    - Connect FLIR Boson via USB OTG adapter
-    - Monitor dmesg for device enumeration
-    - Check if external power is required for camera operation
+- [x] **Test with FLIR ONE Camera:**
+    - FLIR ONE successfully connected and detected
+    - App shows "USB Camera Connected" status
+    - Device requires approximately 200mA (within Glass capabilities)
+
+### Current Implementation Status
+- [x] **FLIR ONE Recognition:**
+    - Added product ID 0x1996 to USBPowerManager for FLIR ONE support
+    - Modified isFlirBosonCamera() to recognize FLIR ONE devices
+
+- [x] **USB Permission Auto-Request:**
+    - Added automatic USB permission request for FLIR devices
+    - Triggers on device attachment when VID is 0x09CB
+    - Should enable automatic camera stream initialization
+
+### Next Steps to Complete
+- [ ] **Build and Deploy Updated APK:**
+    - Build APK with FLIR ONE support and auto-permission request
+    - Test USB permission grant flow on Glass
+    - Verify camera stream initialization after permission granted
+
+- [ ] **Fix Missing MenuActivity:**
+    - TAP gesture currently crashes app due to missing MenuActivity
+    - Either implement MenuActivity or disable TAP gesture temporarily
+
+- [ ] **Verify Video Stream Access:**
+    - Check if UVC camera opens after permission granted
+    - Monitor for video frame callbacks
+    - Verify thermal data is being received and processed
 
 ## Phase 4: Advanced Features & Optimization
 

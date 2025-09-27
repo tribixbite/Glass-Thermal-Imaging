@@ -973,6 +973,13 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                     }
 
                     Toast.makeText(MainActivity.this, message, Toast.LENGTH_SHORT).show();
+
+                    // Auto-request permission for FLIR cameras
+                    if (deviceInfo.contains("FLIR") || deviceInfo.contains("Boson") ||
+                        device.getVendorId() == 0x09CB) {
+                        if (DEBUG) Log.v(TAG, "Auto-requesting permission for FLIR device");
+                        mUSBMonitor.requestPermission(device);
+                    }
                 }
             });
         }

@@ -109,6 +109,10 @@ public class USBPowerManager {
             if (productId == 0x0100 || productId == 0x0101 || productId == 0x0102) {
                 return true;
             }
+            // Check for FLIR ONE product ID
+            if (productId == 0x1996) {  // FLIR ONE Camera
+                return true;
+            }
             // Check device name for Boson
             String deviceName = device.getDeviceName();
             if (deviceName != null && deviceName.toLowerCase().contains("boson")) {
