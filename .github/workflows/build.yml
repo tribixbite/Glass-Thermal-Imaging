@@ -105,15 +105,13 @@ jobs:
       run: |
         ./gradlew :usbCameraTest3:dependencies | grep -A5 -B5 "common" || echo "No common dependencies found"
 
-    - name: Build debug APK with force version
+    - name: Build debug APK with vector drawable fix
       run: |
-        # Force the correct version by adding resolution strategy
-        echo "" >> libuvccamera/build.gradle
-        echo "configurations.all {" >> libuvccamera/build.gradle
-        echo "    resolutionStrategy {" >> libuvccamera/build.gradle
-        echo "        force 'com.serenegiant:common:1.2.0'" >> libuvccamera/build.gradle
-        echo "    }" >> libuvccamera/build.gradle
-        echo "}" >> libuvccamera/build.gradle
+        # Remove problematic vector drawable that causes AAPT errors with API 19
+        # The star.xml contains vector drawable attributes not supported in API 19
+        find ~/.gradle/caches/transforms-3 -name "star.xml" -path "*/common-*/res/drawable-v21/*" -delete 2>/dev/null || true
+
+        # Build the APK
         ./gradlew :usbCameraTest3:assembleDebug --stacktrace
 
     - name: Verify native libraries in APK
