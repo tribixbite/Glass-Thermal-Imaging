@@ -27,8 +27,8 @@ public class FlirOneDriver {
     // Magic bytes for frame start
     private static final byte[] MAGIC_BYTES = {(byte)0xEF, (byte)0xBE, 0x00, 0x00};
 
-    // Frame buffer
-    private static final int FRAME_BUFFER_SIZE = 512 * 1024; // 512KB buffer
+    // Frame buffer (1MB like ROS driver)
+    private static final int FRAME_BUFFER_SIZE = 1024 * 1024; // 1MB buffer
     private byte[] frameBuffer = new byte[FRAME_BUFFER_SIZE];
     private int frameBufferPos = 0;
 
@@ -56,16 +56,29 @@ public class FlirOneDriver {
 
         Log.d(TAG, "Opening FLIR ONE with " + device.getInterfaceCount() + " interfaces");
 
-        // FLIR ONE has 3 interfaces
-        int numInterfaces = Math.min(device.getInterfaceCount(), 3);
+        // FLIR ONE shows 5 interfaces on Glass (0-4)
+        // Interface 0,2,4 have the endpoints we need
+        int numInterfaces = device.getInterfaceCount();
         interfaces = new UsbInterface[numInterfaces];
 
-        // Try to claim available interfaces (may fail for some)
+        // Claim all interfaces and find the ones with endpoints
         for (int i = 0; i < numInterfaces; i++) {
             interfaces[i] = device.getInterface(i);
-            boolean claimed = connection.claimInterface(interfaces[i], true);
-            Log.d(TAG, "Interface " + i + " claimed: " + claimed);
-            // Don't fail completely if one interface fails
+            Log.d(TAG, "Interface " + i + " ID=" + interfaces[i].getId() +
+                     " endpoints=" + interfaces[i].getEndpointCount());
+
+            // Only claim interfaces with endpoints
+            if (interfaces[i].getEndpointCount() > 0) {
+                boolean claimed = connection.claimInterface(interfaces[i], true);
+                Log.d(TAG, "Interface " + i + " claimed: " + claimed);
+                if (!claimed) {
+                    // Try without force flag
+                    claimed = connection.claimInterface(interfaces[i], false);
+                    Log.d(TAG, "Interface " + i + " retry claimed: " + claimed);
+                }
+            } else {
+                Log.d(TAG, "Interface " + i + " skipped (no endpoints)");
+            }
         }
 
         // Find endpoints
@@ -77,9 +90,11 @@ public class FlirOneDriver {
 
     private void findEndpoints() {
         // Find all endpoints across available interfaces
-        for (UsbInterface iface : interfaces) {
+        for (int j = 0; j < interfaces.length; j++) {
+            UsbInterface iface = interfaces[j];
             if (iface == null) continue;
 
+            // Check endpoints
             for (int i = 0; i < iface.getEndpointCount(); i++) {
                 UsbEndpoint ep = iface.getEndpoint(i);
                 int addr = ep.getAddress();
@@ -109,72 +124,97 @@ public class FlirOneDriver {
 
     private boolean initializeCamera() {
         try {
-            byte[] data = new byte[2];
+            // Wait a moment after claiming interfaces
+            Thread.sleep(100);
 
-            // Step 1: Control transfer to interface 2
+            // Step 1: Stop interface 2 FRAME
+            Log.d(TAG, "Sending stop command to interface 2...");
             int r = connection.controlTransfer(
                 UsbConstants.USB_TYPE_VENDOR | UsbConstants.USB_DIR_OUT,
                 0x0b,  // bRequest
-                0,     // wValue
+                0,     // wValue (stop)
                 2,     // wIndex (interface 2)
                 null,  // data
                 0,     // length
-                100    // timeout
+                500    // timeout increased
             );
             if (r < 0) {
-                Log.e(TAG, "Init step 1 failed: " + r);
-                return false;
+                Log.e(TAG, "Stop interface 2 failed: " + r);
+                // Try alternative approach with empty byte array
+                byte[] dummy = new byte[0];
+                r = connection.controlTransfer(
+                    UsbConstants.USB_TYPE_VENDOR | UsbConstants.USB_DIR_OUT,
+                    0x0b, 0, 2, dummy, 0, 500);
+                if (r < 0) {
+                    Log.e(TAG, "Stop interface 2 retry also failed: " + r);
+                    // Continue anyway as device might already be stopped
+                }
+            } else {
+                Log.d(TAG, "Stop interface 2 succeeded");
             }
 
-            // Step 2: Control transfer to interface 1
+            // Step 2: Stop interface 1 FILEIO
+            Log.d(TAG, "Sending stop command to interface 1...");
             r = connection.controlTransfer(
                 UsbConstants.USB_TYPE_VENDOR | UsbConstants.USB_DIR_OUT,
                 0x0b,  // bRequest
-                0,     // wValue
+                0,     // wValue (stop)
                 1,     // wIndex (interface 1)
                 null,  // data
                 0,     // length
-                100    // timeout
+                500    // timeout
             );
             if (r < 0) {
-                Log.e(TAG, "Init step 2 failed: " + r);
-                return false;
+                Log.e(TAG, "Stop interface 1 failed: " + r);
+                // Continue anyway
+            } else {
+                Log.d(TAG, "Stop interface 1 succeeded");
             }
 
-            // Step 3: Control transfer to interface 1 with value 1
+            // Step 3: Start interface 1 FILEIO
+            Log.d(TAG, "Sending start command to interface 1...");
             r = connection.controlTransfer(
                 UsbConstants.USB_TYPE_VENDOR | UsbConstants.USB_DIR_OUT,
                 0x0b,  // bRequest
-                1,     // wValue
+                1,     // wValue (start)
                 1,     // wIndex (interface 1)
                 null,  // data
                 0,     // length
-                100    // timeout
+                500    // timeout
             );
             if (r < 0) {
-                Log.e(TAG, "Init step 3 failed: " + r);
-                return false;
+                Log.e(TAG, "Start interface 1 failed: " + r);
+                // Continue anyway
+            } else {
+                Log.d(TAG, "Start interface 1 succeeded");
             }
 
-            // Send configuration commands via bulk transfer
+            // Send CameraFiles.zip request
             sendConfigCommands();
 
-            // Step 4: Start video stream
-            data[0] = 0x00;
-            data[1] = 0x00;
+            // Wait for initialization
+            Thread.sleep(200);
+
+            // Step 4: Start video stream (simplified - no data)
+            Log.d(TAG, "Sending start command to interface 2 (video)...");
             r = connection.controlTransfer(
                 UsbConstants.USB_TYPE_VENDOR | UsbConstants.USB_DIR_OUT,
                 0x0b,  // bRequest
-                1,     // wValue
+                1,     // wValue (start)
                 2,     // wIndex (interface 2)
-                data,  // data
-                2,     // length
-                200    // timeout
+                null,  // No data - critical for Glass
+                0,     // length = 0
+                500    // timeout
             );
             if (r < 0) {
                 Log.e(TAG, "Start stream failed: " + r);
-                return false;
+                // Continue anyway, might still work
+            } else {
+                Log.d(TAG, "Start stream succeeded");
             }
+
+            // Wait for stream to stabilize
+            Thread.sleep(500);
 
             if (DEBUG) Log.d(TAG, "Camera initialized successfully");
             return true;
@@ -186,14 +226,31 @@ public class FlirOneDriver {
     }
 
     private void sendConfigCommands() {
-        // Send configuration strings (from the C++ code)
-        byte[] config1 = hexStringToByteArray("0c0001000100000000000000");
-        byte[] config2 = hexStringToByteArray("0c0001000300000000000000");
-
-        if (epControlOut != null) {
-            connection.bulkTransfer(epControlOut, config1, config1.length, 100);
-            connection.bulkTransfer(epControlOut, config2, config2.length, 100);
+        if (epControlOut == null) {
+            Log.e(TAG, "Control OUT endpoint not found");
+            return;
         }
+
+        // Send CameraFiles.zip request (required for initialization)
+        // Header 1
+        byte[] header1 = hexStringToByteArray("cc0100000100000041000000F8B3F700");
+        connection.bulkTransfer(epControlOut, header1, header1.length, 100);
+
+        // JSON 1
+        String json1 = "{\"type\":\"openFile\",\"data\":{\"mode\":\"r\",\"path\":\"CameraFiles.zip\"}}";
+        byte[] json1Bytes = json1.getBytes();
+        connection.bulkTransfer(epControlOut, json1Bytes, json1Bytes.length, 100);
+
+        // Header 2
+        byte[] header2 = hexStringToByteArray("cc0100000100000033000000efdbc1c1");
+        connection.bulkTransfer(epControlOut, header2, header2.length, 100);
+
+        // JSON 2
+        String json2 = "{\"type\":\"readFile\",\"data\":{\"streamIdentifier\":10}}";
+        byte[] json2Bytes = json2.getBytes();
+        connection.bulkTransfer(epControlOut, json2Bytes, json2Bytes.length, 100);
+
+        if (DEBUG) Log.d(TAG, "Sent CameraFiles.zip request");
     }
 
     public void startStream(FrameCallback callback) {
@@ -211,6 +268,8 @@ public class FlirOneDriver {
 
     private void streamLoop() {
         byte[] buffer = new byte[16384]; // 16KB chunks
+        byte[] statusBuffer = new byte[512];
+        int timeoutCount = 0;
 
         while (isStreaming) {
             if (epVideo == null) {
@@ -219,16 +278,30 @@ public class FlirOneDriver {
             }
 
             // Read from video endpoint
-            int bytesRead = connection.bulkTransfer(epVideo, buffer, buffer.length, 200);
+            int bytesRead = connection.bulkTransfer(epVideo, buffer, buffer.length, 1000);
 
             if (bytesRead > 0) {
                 processVideoData(buffer, bytesRead);
-            }
+                timeoutCount = 0;
+            } else {
+                // On timeout, poll status endpoints to keep connection alive
+                timeoutCount++;
 
-            // Also poll status endpoint (non-blocking)
-            if (epStatus != null) {
-                byte[] statusBuffer = new byte[512];
-                connection.bulkTransfer(epStatus, statusBuffer, statusBuffer.length, 10);
+                // Poll EP 0x81
+                if (epControlIn != null) {
+                    connection.bulkTransfer(epControlIn, statusBuffer, statusBuffer.length, 10);
+                }
+
+                // Poll EP 0x83
+                if (epStatus != null) {
+                    connection.bulkTransfer(epStatus, statusBuffer, statusBuffer.length, 10);
+                }
+
+                // Break if too many timeouts
+                if (timeoutCount > 100) {
+                    Log.e(TAG, "Too many timeouts, stopping stream");
+                    break;
+                }
             }
         }
     }
