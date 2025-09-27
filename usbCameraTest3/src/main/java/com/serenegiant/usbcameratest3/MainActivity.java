@@ -101,6 +101,10 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
     private USBPowerManager mUSBPowerManager;
     private USBPowerManager.PowerState mCurrentPowerState = USBPowerManager.PowerState.UNKNOWN;
 
+    // Performance management for Glass hardware optimization
+    private GlassPerformanceManager mPerformanceManager;
+    private GlassPerformanceManager.PerformanceMode mCurrentPerformanceMode = GlassPerformanceManager.PerformanceMode.BALANCED;
+
     // Glass UI components
     private ImageView mThermalOverlay;
     private GestureDetector mGestureDetector;
@@ -219,6 +223,31 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                 if (DEBUG) Log.w(TAG, "Power warning: " + warning);
             }
         });
+
+        // Initialize performance management for Glass hardware optimization
+        mPerformanceManager = new GlassPerformanceManager(this);
+        mPerformanceManager.setListener(new GlassPerformanceManager.PerformanceListener() {
+            @Override
+            public void onPerformanceModeChanged(GlassPerformanceManager.PerformanceMode mode, String reason) {
+                mCurrentPerformanceMode = mode;
+                handlePerformanceModeChange(mode, reason);
+            }
+
+            @Override
+            public void onFrameRateChanged(int targetFps, String details) {
+                handleFrameRateChange(targetFps, details);
+            }
+
+            @Override
+            public void onProcessingOptimization(int width, int height, int decimation) {
+                handleProcessingOptimization(width, height, decimation);
+            }
+
+            @Override
+            public void onBatteryLifeEstimate(long estimatedMinutes) {
+                handleBatteryLifeEstimate(estimatedMinutes);
+            }
+        });
     }
 
     private void initializeLocationServices() {
@@ -334,6 +363,10 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         if (mUSBPowerManager != null) {
             mUSBPowerManager.cleanup();
             mUSBPowerManager = null;
+        }
+        if (mPerformanceManager != null) {
+            mPerformanceManager.cleanup();
+            mPerformanceManager = null;
         }
         super.onDestroy();
     }
@@ -504,6 +537,12 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
             return;
         }
 
+        // Performance optimization: Check if we should process this frame
+        if (mPerformanceManager != null && !mPerformanceManager.shouldProcessFrame()) {
+            // Skip this frame to maintain target fps and reduce CPU load
+            return;
+        }
+
         // Copy thermal data for background processing to avoid race conditions
         final byte[] thermalDataCopy;
         final int width, height, palette;
@@ -535,8 +574,13 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
             @Override
             public void run() {
                 try {
+                    // Performance optimization: Get optimal resolution based on current mode
+                    int[] optimalSize = getOptimalThermalResolution(width, height);
+                    int optimalWidth = optimalSize[0];
+                    int optimalHeight = optimalSize[1];
+
                     // Create thermal visualization bitmap with auto-contrast
-                    Bitmap thermalBitmap = createThermalBitmapWithAutoContrast(thermalDataCopy, width, height, palette);
+                    Bitmap thermalBitmap = createThermalBitmapWithAutoContrast(thermalDataCopy, optimalWidth, optimalHeight, palette);
 
                     if (thermalBitmap != null) {
                         Canvas canvas = new Canvas(thermalBitmap);
@@ -562,6 +606,31 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                 }
             }
         });
+    }
+
+    /**
+     * Get optimal thermal resolution based on current performance mode
+     * Reduces resolution in battery saver or thermal throttle modes
+     */
+    private int[] getOptimalThermalResolution(int originalWidth, int originalHeight) {
+        if (mPerformanceManager == null) {
+            return new int[]{originalWidth, originalHeight};
+        }
+
+        // Use the performance manager's optimal thermal dimensions
+        int optimalWidth = mPerformanceManager.getOptimalThermalWidth();
+        int optimalHeight = mPerformanceManager.getOptimalThermalHeight();
+
+        // Ensure we don't exceed original resolution
+        optimalWidth = Math.min(optimalWidth, originalWidth);
+        optimalHeight = Math.min(optimalHeight, originalHeight);
+
+        if (DEBUG && (optimalWidth != originalWidth || optimalHeight != originalHeight)) {
+            Log.v(TAG, String.format("Thermal resolution optimized: %dx%d -> %dx%d",
+                originalWidth, originalHeight, optimalWidth, optimalHeight));
+        }
+
+        return new int[]{optimalWidth, optimalHeight};
     }
 
     private void drawCrosshair(Canvas canvas) {
@@ -949,6 +1018,9 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                         }
                     });
 
+                    // Performance monitoring is already started in constructor
+                    if (DEBUG) Log.v(TAG, "Performance monitoring active for FLIR Boson");
+
                 } catch (final Exception e) {
                     Log.e(TAG, "Error connecting to camera", e);
                     releaseCamera();
@@ -981,6 +1053,9 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
 
             // Reset power state
             mCurrentPowerState = USBPowerManager.PowerState.UNKNOWN;
+
+            // Performance monitoring will be cleaned up in onDestroy
+            if (DEBUG) Log.v(TAG, "Camera disconnected - performance state reset");
 
             runOnUiThread(new Runnable() {
                 @Override
@@ -1085,6 +1160,70 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         // Update status with battery info during operation
         if (mUVCCamera != null && level < 20 && !charging) {
             showToast("⚠️ Low battery: " + level + "% - Consider connecting power");
+        }
+
+        // Update performance manager with battery status
+        if (mPerformanceManager != null) {
+            mPerformanceManager.updateBatteryState(level, charging);
+        }
+    }
+
+    // Performance Management callbacks
+    private void handlePerformanceModeChange(GlassPerformanceManager.PerformanceMode mode, String reason) {
+        if (DEBUG) Log.v(TAG, "Performance mode changed: " + mode + " - " + reason);
+
+        String statusMessage;
+        switch (mode) {
+            case BATTERY_SAVER:
+                statusMessage = "🔋 Battery Saver Mode - Reduced performance";
+                break;
+            case PERFORMANCE:
+                statusMessage = "🚀 Performance Mode - Maximum quality";
+                break;
+            case THERMAL_THROTTLE:
+                statusMessage = "🌡️ Thermal Throttle - Cooling down";
+                break;
+            case BALANCED:
+            default:
+                statusMessage = "⚖️ Balanced Mode - Optimal efficiency";
+                break;
+        }
+
+        updateStatusText(statusMessage);
+        if (!reason.isEmpty()) {
+            showToast(reason);
+        }
+    }
+
+    private void handleFrameRateChange(int targetFps, String reason) {
+        if (DEBUG) Log.v(TAG, "Frame rate changed: " + targetFps + "fps - " + reason);
+
+        // Apply frame rate optimization to thermal processing
+        // This reduces CPU/GPU load by processing fewer frames
+        if (mThermalProcessingExecutor != null && !reason.isEmpty()) {
+            showToast("Frame rate: " + targetFps + "fps (" + reason + ")");
+        }
+    }
+
+    private void handleProcessingOptimization(int width, int height, int decimation) {
+        if (DEBUG) Log.v(TAG, String.format("Processing optimized: %dx%d, decimation: %d", width, height, decimation));
+
+        // Update thermal frame dimensions for processing optimization
+        synchronized (mThermalLock) {
+            // Only update if not using live thermal data dimensions
+            if (!mRawDataEnabled) {
+                mThermalFrameWidth = width;
+                mThermalFrameHeight = height;
+            }
+        }
+    }
+
+    private void handleBatteryLifeEstimate(long estimatedMinutes) {
+        if (DEBUG) Log.v(TAG, "Battery life estimate: " + estimatedMinutes + " minutes");
+
+        // Show battery life warning if less than 30 minutes
+        if (estimatedMinutes < 30 && estimatedMinutes > 0) {
+            showToast("🔋 Battery life: ~" + estimatedMinutes + " minutes");
         }
     }
 
