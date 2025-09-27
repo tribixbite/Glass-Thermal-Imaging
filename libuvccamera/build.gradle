@@ -96,8 +96,8 @@ task ndkClean(type: Exec, description: 'clean JNI libraries') {
 dependencies {
     implementation fileTree(dir: new File(buildDir, 'libs'), include: '*.jar')
 	implementation "com.android.support:support-annotations:${supportLibVersion}"
-	// Use version 1.2.0 which has string resources but no vector drawables
-	implementation("com.serenegiant:common:1.2.0") {
+	// Use version 1.1.0 which has string resources but no vector drawables
+	implementation("com.serenegiant:common:1.1.0") {
 		exclude module: 'support-v4'
 	}
 }
