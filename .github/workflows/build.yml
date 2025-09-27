@@ -108,6 +108,10 @@ jobs:
         </shape>
         EOF
           echo "✅ Fixed vector drawable for API 19 compatibility"
+
+          # Clean processed resources to force regeneration with fixed file
+          ./gradlew clean
+          echo "✅ Cleaned cache to use fixed drawable"
         else
           echo "⚠️ Star.xml not found in cache"
         fi
