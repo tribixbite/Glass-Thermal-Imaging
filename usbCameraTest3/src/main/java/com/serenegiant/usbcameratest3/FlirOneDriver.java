@@ -127,100 +127,24 @@ public class FlirOneDriver {
             // Wait a moment after claiming interfaces
             Thread.sleep(100);
 
-            // Step 1: Stop interface 2 FRAME
-            Log.d(TAG, "Sending stop command to interface 2...");
-            // Use exact values from working C code: 0x01 for bRequestType
-            int r = connection.controlTransfer(
-                0x01,  // bRequestType: Vendor OUT (0x01 worked in C)
-                0x0b,  // bRequest
-                0,     // wValue (stop)
-                2,     // wIndex (interface 2)
-                null,  // data
-                0,     // length
-                500    // timeout increased
-            );
-            if (r < 0) {
-                Log.e(TAG, "Stop interface 2 failed: " + r);
-                // Try alternative approach with empty byte array
-                byte[] dummy = new byte[0];
-                r = connection.controlTransfer(
-                    0x01,  // Vendor OUT
-                    0x0b, 0, 2, dummy, 0, 500);
-                if (r < 0) {
-                    Log.e(TAG, "Stop interface 2 retry also failed: " + r);
-                    // Continue anyway as device might already be stopped
-                }
-            } else {
-                Log.d(TAG, "Stop interface 2 succeeded");
-            }
+            // MINIMAL INIT FOR GLASS: Skip control transfers since Glass kernel doesn't support them
+            // Just try to send the config commands via bulk transfer
+            Log.d(TAG, "GLASS MODE: Skipping control transfers, trying direct config...");
 
-            // Step 2: Stop interface 1 FILEIO
-            Log.d(TAG, "Sending stop command to interface 1...");
-            r = connection.controlTransfer(
-                0x01,  // bRequestType: Vendor OUT
-                0x0b,  // bRequest
-                0,     // wValue (stop)
-                1,     // wIndex (interface 1)
-                null,  // data
-                0,     // length
-                500    // timeout
-            );
-            if (r < 0) {
-                Log.e(TAG, "Stop interface 1 failed: " + r);
-                // Continue anyway
-            } else {
-                Log.d(TAG, "Stop interface 1 succeeded");
-            }
-
-            // Step 3: Start interface 1 FILEIO
-            Log.d(TAG, "Sending start command to interface 1...");
-            r = connection.controlTransfer(
-                0x01,  // bRequestType: Vendor OUT
-                0x0b,  // bRequest
-                1,     // wValue (start)
-                1,     // wIndex (interface 1)
-                null,  // data
-                0,     // length
-                500    // timeout
-            );
-            if (r < 0) {
-                Log.e(TAG, "Start interface 1 failed: " + r);
-                // Continue anyway
-            } else {
-                Log.d(TAG, "Start interface 1 succeeded");
-            }
-
-            // Send CameraFiles.zip request
+            // Send minimal config via bulk transfers
             sendConfigCommands();
 
             // Wait for initialization
-            Thread.sleep(200);
-
-            // Step 4: Start video stream - ROS driver sends 2 bytes {0,0}
-            Log.d(TAG, "Sending start command to interface 2 (video)...");
-            byte[] startData = new byte[]{0, 0};  // ROS driver sends this
-            r = connection.controlTransfer(
-                0x01,  // bRequestType: Vendor OUT
-                0x0b,  // bRequest
-                1,     // wValue (start)
-                2,     // wIndex (interface 2)
-                startData,  // 2 bytes of zeros like ROS driver
-                2,     // length = 2
-                500    // timeout
-            );
-            if (r < 0) {
-                Log.e(TAG, "Start stream failed: " + r);
-                // Continue anyway, might still work
-            } else {
-                Log.d(TAG, "Start stream succeeded");
-            }
-
-            // Wait for stream to stabilize
             Thread.sleep(500);
 
-            // Even if control transfers fail, try to proceed
-            // The camera might already be in the right state
-            Log.d(TAG, "Camera initialization complete (ignoring control transfer errors)");
+            // Try to read something to wake up the camera
+            if (epVideo != null) {
+                byte[] testBuf = new byte[512];
+                int test = connection.bulkTransfer(epVideo, testBuf, testBuf.length, 100);
+                Log.d(TAG, "Test read from video EP: " + test + " bytes");
+            }
+
+            Log.d(TAG, "Camera initialization complete (Glass minimal mode)");
             return true;
 
         } catch (Exception e) {
@@ -230,59 +154,29 @@ public class FlirOneDriver {
     }
 
     private void sendConfigCommands() {
-        Log.d(TAG, "sendConfigCommands: epControlOut=" + epControlOut + ", epControlIn=" + epControlIn);
-        Log.d(TAG, "Connection valid: " + (connection != null));
-        if (epControlOut == null) {
-            Log.e(TAG, "Control OUT endpoint not found");
-            return;
-        }
-        if (connection == null) {
-            Log.e(TAG, "USB connection is null!");
-            return;
-        }
+        Log.d(TAG, "GLASS MODE: Attempting minimal config...");
 
-        // Try a simple test first - just read from EP 0x81
-        byte[] testRead = new byte[512];
-        int test = connection.bulkTransfer(epControlIn, testRead, testRead.length, 100);
-        Log.d(TAG, "Test read from 0x81: " + test + " bytes");
+        // Since bulk transfers fail on Glass, let's skip the config entirely
+        // The FLIR might work without it
+        Log.d(TAG, "Skipping CameraFiles.zip request on Glass");
 
-        // Send CameraFiles.zip request (required for initialization)
-        // Header 1
-        byte[] header1 = hexStringToByteArray("cc0100000100000041000000F8B3F700");
-        int ret = connection.bulkTransfer(epControlOut, header1, header1.length, 100);
-        Log.d(TAG, "Header1 sent: " + ret + " bytes (error means USB not ready)");
-
-        // JSON 1
-        String json1 = "{\"type\":\"openFile\",\"data\":{\"mode\":\"r\",\"path\":\"CameraFiles.zip\"}}";
-        byte[] json1Bytes = json1.getBytes();
-        ret = connection.bulkTransfer(epControlOut, json1Bytes, json1Bytes.length, 100);
-        Log.d(TAG, "JSON1 sent: " + ret + " bytes");
-
-        // Header 2
-        byte[] header2 = hexStringToByteArray("cc0100000100000033000000efdbc1c1");
-        ret = connection.bulkTransfer(epControlOut, header2, header2.length, 100);
-        Log.d(TAG, "Header2 sent: " + ret + " bytes");
-
-        // JSON 2
-        String json2 = "{\"type\":\"readFile\",\"data\":{\"streamIdentifier\":10}}";
-        byte[] json2Bytes = json2.getBytes();
-        ret = connection.bulkTransfer(epControlOut, json2Bytes, json2Bytes.length, 100);
-        Log.d(TAG, "JSON2 sent: " + ret + " bytes");
-
-        if (DEBUG) Log.d(TAG, "Sent CameraFiles.zip request");
-
-        // Read response from EP 0x81 (like the C test does)
+        // Just try to poll the endpoints to see if anything works
         if (epControlIn != null) {
-            byte[] response = new byte[65536];
-            int resp = connection.bulkTransfer(epControlIn, response, response.length, 500);
-            if (resp > 0) {
-                Log.d(TAG, "Got " + resp + " bytes response from EP 0x81");
-                // Check for battery JSON response
-                if (resp > 16 && response[16] == '{') {
-                    String json = new String(response, 16, Math.min(resp - 16, 200));
-                    Log.d(TAG, "Response JSON: " + json);
-                }
-            }
+            byte[] testBuf = new byte[512];
+            int test = connection.bulkTransfer(epControlIn, testBuf, testBuf.length, 10);
+            Log.d(TAG, "EP 0x81 test: " + test);
+        }
+
+        if (epStatus != null) {
+            byte[] testBuf = new byte[512];
+            int test = connection.bulkTransfer(epStatus, testBuf, testBuf.length, 10);
+            Log.d(TAG, "EP 0x83 test: " + test);
+        }
+
+        if (epVideo != null) {
+            byte[] testBuf = new byte[512];
+            int test = connection.bulkTransfer(epVideo, testBuf, testBuf.length, 10);
+            Log.d(TAG, "EP 0x85 test: " + test);
         }
     }
 
@@ -313,38 +207,45 @@ public class FlirOneDriver {
                 break;
             }
 
-            // Read from video endpoint with longer timeout
-            int bytesRead = connection.bulkTransfer(epVideo, buffer, buffer.length, 2000);
+            // Read from video endpoint - use 200ms timeout like ROS driver
+            int bytesRead = connection.bulkTransfer(epVideo, buffer, buffer.length, 200);
 
             if (bytesRead > 0) {
                 Log.d(TAG, "Got " + bytesRead + " bytes from video endpoint");
                 processVideoData(buffer, bytesRead);
                 timeoutCount = 0;
                 framesReceived++;
-            } else {
-                // On timeout, poll status endpoints to keep connection alive
+            } else if (bytesRead == -110) {  // Timeout
                 timeoutCount++;
                 if (timeoutCount % 10 == 0) {
                     Log.d(TAG, "Timeout " + timeoutCount + ", frames=" + framesReceived);
                 }
+            }
 
-                // Poll EP 0x81
-                if (epControlIn != null) {
-                    connection.bulkTransfer(epControlIn, statusBuffer, statusBuffer.length, 10);
-                }
-
-                // Poll EP 0x83
-                if (epStatus != null) {
-                    connection.bulkTransfer(epStatus, statusBuffer, statusBuffer.length, 10);
-                }
-
-                // Break if too many timeouts
-                if (timeoutCount > 100) {
-                    Log.e(TAG, "Too many timeouts, stopping stream");
-                    break;
+            // ALWAYS poll EP 0x81 and 0x83 regardless of success - this is key!
+            // ROS driver does this after every iteration
+            if (epControlIn != null) {
+                int ret = connection.bulkTransfer(epControlIn, statusBuffer, statusBuffer.length, 10);
+                if (ret > 0 && DEBUG) {
+                    Log.d(TAG, "EP 0x81: " + ret + " bytes");
                 }
             }
+
+            if (epStatus != null) {
+                int ret = connection.bulkTransfer(epStatus, statusBuffer, statusBuffer.length, 10);
+                if (ret > 0 && DEBUG) {
+                    Log.d(TAG, "EP 0x83: " + ret + " bytes");
+                }
+            }
+
+            // Break if too many timeouts
+            if (timeoutCount > 100) {
+                Log.e(TAG, "Too many timeouts, stopping stream");
+                break;
+            }
         }
+
+        Log.d(TAG, "Stream loop ended");
     }
 
     private void processVideoData(byte[] data, int length) {

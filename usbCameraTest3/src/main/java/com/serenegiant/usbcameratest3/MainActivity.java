@@ -94,7 +94,7 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
     // USB camera components
     private USBMonitor mUSBMonitor;
     private UVCCamera mUVCCamera;
-    private FlirOneDriver mFlirOneDriver; // FLIR ONE specific driver
+    private FlirOneDriverV2 mFlirOneDriver; // FLIR ONE specific driver V2 (clean implementation)
     private UVCCameraTextureView mUVCCameraView;
     private Surface mPreviewSurface;
     private boolean mIsRecording = false;
@@ -1006,17 +1006,17 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
             if (DEBUG) Log.v(TAG, "onConnect:" + device);
 
             // Check if this is a FLIR ONE device
-            if (FlirOneDriver.isFlirOneDevice(device)) {
+            if (FlirOneDriverV2.isFlirOneDevice(device)) {
                 // Use FLIR ONE specific driver
                 synchronized (mSync) {
                     releaseCamera();
                     try {
-                        mFlirOneDriver = new FlirOneDriver(device);
+                        mFlirOneDriver = new FlirOneDriverV2(device);
                         if (mFlirOneDriver.open(ctrlBlock.getConnection())) {
                             if (DEBUG) Log.i(TAG, "FLIR ONE driver opened successfully");
 
                             // Start streaming with callback
-                            mFlirOneDriver.startStream(new FlirOneDriver.FrameCallback() {
+                            mFlirOneDriver.startStream(new FlirOneDriverV2.FrameCallback() {
                                 @Override
                                 public void onThermalFrame(byte[] thermalData, int width, int height) {
                                     processThermalFrame(thermalData, width, height);

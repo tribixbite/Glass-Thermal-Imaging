@@ -52,12 +52,14 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- USB device filter for FLIR Boson cameras -->
+            <!-- USB device filter disabled to prevent auto-launch loops -->
+            <!-- Uncomment to re-enable auto-launch on USB attach
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
             </intent-filter>
             <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                 android:resource="@xml/device_filter" />
+            -->
             <!-- Google Glass Voice Trigger -->
             <intent-filter>
                 <action android:name="com.google.android.glass.action.VOICE_TRIGGER" />
