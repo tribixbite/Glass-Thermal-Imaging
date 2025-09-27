@@ -108,14 +108,12 @@ jobs:
     - name: Build debug APK with force version
       run: |
         # Force the correct version by adding resolution strategy
-        cat >> libuvccamera/build.gradle << 'EOF'
-
-configurations.all {
-    resolutionStrategy {
-        force 'com.serenegiant:common:1.2.0'
-    }
-}
-EOF
+        echo "" >> libuvccamera/build.gradle
+        echo "configurations.all {" >> libuvccamera/build.gradle
+        echo "    resolutionStrategy {" >> libuvccamera/build.gradle
+        echo "        force 'com.serenegiant:common:1.2.0'" >> libuvccamera/build.gradle
+        echo "    }" >> libuvccamera/build.gradle
+        echo "}" >> libuvccamera/build.gradle
         ./gradlew :usbCameraTest3:assembleDebug --stacktrace
 
     - name: Verify native libraries in APK
