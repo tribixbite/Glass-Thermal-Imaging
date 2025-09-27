@@ -94,6 +94,7 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
     // USB camera components
     private USBMonitor mUSBMonitor;
     private UVCCamera mUVCCamera;
+    private FlirOneDriver mFlirOneDriver; // FLIR ONE specific driver
     private UVCCameraTextureView mUVCCameraView;
     private Surface mPreviewSurface;
     private boolean mIsRecording = false;
@@ -1001,50 +1002,98 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         @Override
         public void onConnect(final UsbDevice device, final USBMonitor.UsbControlBlock ctrlBlock, final boolean createNew) {
             if (DEBUG) Log.v(TAG, "onConnect:" + device);
-            synchronized (mSync) {
-                releaseCamera();
-                try {
-                    mUVCCamera = new UVCCamera();
-                    mUVCCamera.open(ctrlBlock);
 
-                    if (DEBUG) Log.i(TAG, "supportedSize:" + mUVCCamera.getSupportedSizeList());
-
-                    if (mUVCCameraView != null) {
-                        mUVCCameraView.onResume();
-                        mPreviewSurface = mUVCCameraView.getSurface();
-                        mUVCCamera.setPreviewSize(GLASS_WIDTH, GLASS_HEIGHT);
-
-                        // Store actual thermal frame dimensions for processing
-                        // These may be different from display dimensions
-                        synchronized (mThermalLock) {
-                            // Check actual supported sizes to determine thermal frame dimensions
-                            String sizeList = mUVCCamera.getSupportedSizeList().toString();
-                            if (sizeList != null && sizeList.contains("320x256")) {
-                                mThermalFrameWidth = 320;
-                                mThermalFrameHeight = 256;
-                            } else {
-                                mThermalFrameWidth = 640;
-                                mThermalFrameHeight = 512;
-                            }
-                        }
-
-                        mUVCCamera.setPreviewDisplay(mPreviewSurface);
-                        mUVCCamera.startPreview();
-                    }
-
-                    runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            updateStatusText("FLIR Boson Active - Tap for Menu");
-                        }
-                    });
-
-                    // Performance monitoring is already started in constructor
-                    if (DEBUG) Log.v(TAG, "Performance monitoring active for FLIR Boson");
-
-                } catch (final Exception e) {
-                    Log.e(TAG, "Error connecting to camera", e);
+            // Check if this is a FLIR ONE device
+            if (FlirOneDriver.isFlirOneDevice(device)) {
+                // Use FLIR ONE specific driver
+                synchronized (mSync) {
                     releaseCamera();
+                    try {
+                        mFlirOneDriver = new FlirOneDriver(device);
+                        if (mFlirOneDriver.open(ctrlBlock.getConnection())) {
+                            if (DEBUG) Log.i(TAG, "FLIR ONE driver opened successfully");
+
+                            // Start streaming with callback
+                            mFlirOneDriver.startStream(new FlirOneDriver.FrameCallback() {
+                                @Override
+                                public void onThermalFrame(byte[] thermalData, int width, int height) {
+                                    processThermalFrame(thermalData, width, height);
+                                }
+
+                                @Override
+                                public void onVisibleFrame(byte[] jpegData) {
+                                    // Process visible light image if needed
+                                    if (DEBUG) Log.d(TAG, "Received visible frame: " + jpegData.length + " bytes");
+                                }
+
+                                @Override
+                                public void onError(String error) {
+                                    Log.e(TAG, "FLIR ONE error: " + error);
+                                }
+                            });
+
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    updateStatusText("FLIR ONE Active - Streaming");
+                                }
+                            });
+                        } else {
+                            Log.e(TAG, "Failed to open FLIR ONE driver");
+                            releaseCamera();
+                        }
+                    } catch (final Exception e) {
+                        Log.e(TAG, "Error connecting to FLIR ONE", e);
+                        releaseCamera();
+                    }
+                }
+            } else {
+                // Fall back to standard UVC for other cameras
+                synchronized (mSync) {
+                    releaseCamera();
+                    try {
+                        mUVCCamera = new UVCCamera();
+                        mUVCCamera.open(ctrlBlock);
+
+                        if (DEBUG) Log.i(TAG, "supportedSize:" + mUVCCamera.getSupportedSizeList());
+
+                        if (mUVCCameraView != null) {
+                            mUVCCameraView.onResume();
+                            mPreviewSurface = mUVCCameraView.getSurface();
+                            mUVCCamera.setPreviewSize(GLASS_WIDTH, GLASS_HEIGHT);
+
+                            // Store actual thermal frame dimensions for processing
+                            // These may be different from display dimensions
+                            synchronized (mThermalLock) {
+                                // Check actual supported sizes to determine thermal frame dimensions
+                                String sizeList = mUVCCamera.getSupportedSizeList().toString();
+                                if (sizeList != null && sizeList.contains("320x256")) {
+                                    mThermalFrameWidth = 320;
+                                    mThermalFrameHeight = 256;
+                                } else {
+                                    mThermalFrameWidth = 640;
+                                    mThermalFrameHeight = 512;
+                                }
+                            }
+
+                            mUVCCamera.setPreviewDisplay(mPreviewSurface);
+                            mUVCCamera.startPreview();
+                        }
+
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                updateStatusText("FLIR Boson Active - Tap for Menu");
+                            }
+                        });
+
+                        // Performance monitoring is already started in constructor
+                        if (DEBUG) Log.v(TAG, "Performance monitoring active for FLIR Boson");
+
+                    } catch (final Exception e) {
+                        Log.e(TAG, "Error connecting to camera", e);
+                        releaseCamera();
+                    }
                 }
             }
         }
@@ -1122,6 +1171,14 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
 
     private void releaseCamera() {
         synchronized (mSync) {
+            if (mFlirOneDriver != null) {
+                try {
+                    mFlirOneDriver.close();
+                } catch (final Exception e) {
+                    Log.e(TAG, "Error releasing FLIR ONE", e);
+                }
+                mFlirOneDriver = null;
+            }
             if (mUVCCamera != null) {
                 try {
                     mUVCCamera.close();
@@ -1139,6 +1196,19 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                 mPreviewSurface = null;
             }
         }
+    }
+
+    private void processThermalFrame(byte[] thermalData, int width, int height) {
+        // Convert 16-bit thermal data to temperature values
+        synchronized (mThermalLock) {
+            mLatestThermalFrame = thermalData;
+            mThermalFrameWidth = width;
+            mThermalFrameHeight = height;
+            mRawDataEnabled = true;
+        }
+
+        // Generate thermal overlay
+        generateThermalOverlayAsync();
     }
 
     // CameraDialog.CameraDialogParent implementation

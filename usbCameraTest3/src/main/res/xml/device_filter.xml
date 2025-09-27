@@ -27,6 +27,9 @@
 	<!-- FLIR Boson thermal cameras (primary target) -->
 	<usb-device vendor-id="2507" />	<!-- FLIR vendor ID 0x09CB -->
 
+	<!-- FLIR ONE thermal camera -->
+	<usb-device vendor-id="2507" product-id="6550" />	<!-- FLIR ONE 0x09CB:0x1996 -->
+
 	<!-- Generic UVC devices as fallback -->
 	<usb-device class="239" subclass="2" />	<!-- all UVC devices -->
 
