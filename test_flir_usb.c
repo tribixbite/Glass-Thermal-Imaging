@@ -132,12 +132,17 @@ int main(int argc, char *argv[]) {
     // }
     // sleep(1);
 
-    // Claim interfaces
+    // Claim interfaces with delays to avoid race conditions
     printf("\nClaiming interfaces...\n");
     for (int i = 0; i < 3; i++) {
         ret = ioctl(fd, USBDEVFS_CLAIMINTERFACE, &i);
         printf("Interface %d: %s\n", i, (ret == 0) ? "OK" : strerror(errno));
+        usleep(50000);  // 50ms delay between claims
     }
+
+    // Let device stabilize after claiming
+    printf("Waiting for device to stabilize...\n");
+    usleep(200000);  // 200ms delay
 
     // Set alternate interfaces according to USB descriptor
     printf("\nSetting alternate interfaces...\n");
@@ -148,12 +153,30 @@ int main(int argc, char *argv[]) {
     setif.altsetting = 0;  // Use Alt 0 which has EP 0x83/0x04
     ret = ioctl(fd, USBDEVFS_SETINTERFACE, &setif);
     printf("Interface 1 alt 0: %d\n", ret);
+    usleep(100000);  // 100ms delay after setting
 
-    // Interface 2: alt 1 for video streaming (high bandwidth mode)
+    // Interface 2: Try alt 0 first (if alt 1 causes disconnect)
+    // If overheating/power issues, alt 0 might be more stable
     setif.interface = 2;
-    setif.altsetting = 1;  // Use Alt 1 for video streaming
+    setif.altsetting = 0;  // Try Alt 0 first for stability
     ret = ioctl(fd, USBDEVFS_SETINTERFACE, &setif);
-    printf("Interface 2 alt 1: %d\n", ret);
+    printf("Interface 2 alt 0: %d (trying lower bandwidth first)\n", ret);
+    usleep(100000);  // 100ms delay
+
+    // Now try switching to alt 1 for video streaming
+    printf("Attempting to switch to high bandwidth mode...\n");
+    setif.interface = 2;
+    setif.altsetting = 1;  // High bandwidth for video streaming
+    ret = ioctl(fd, USBDEVFS_SETINTERFACE, &setif);
+    if (ret < 0) {
+        printf("Alt 1 failed (%s), continuing with alt 0\n", strerror(errno));
+        // Revert to alt 0 if alt 1 fails
+        setif.altsetting = 0;
+        ioctl(fd, USBDEVFS_SETINTERFACE, &setif);
+    } else {
+        printf("Interface 2 alt 1: SUCCESS\n");
+    }
+    usleep(200000);  // 200ms delay after interface setup
 
     // Send initialization commands (following ROS driver sequence)
     printf("\nSending init commands...\n");
