@@ -129,8 +129,9 @@ public class FlirOneDriver {
 
             // Step 1: Stop interface 2 FRAME
             Log.d(TAG, "Sending stop command to interface 2...");
+            // Use exact values from working C code: 0x01 for bRequestType
             int r = connection.controlTransfer(
-                UsbConstants.USB_TYPE_VENDOR | UsbConstants.USB_DIR_OUT,
+                0x01,  // bRequestType: Vendor OUT (0x01 worked in C)
                 0x0b,  // bRequest
                 0,     // wValue (stop)
                 2,     // wIndex (interface 2)
@@ -143,7 +144,7 @@ public class FlirOneDriver {
                 // Try alternative approach with empty byte array
                 byte[] dummy = new byte[0];
                 r = connection.controlTransfer(
-                    UsbConstants.USB_TYPE_VENDOR | UsbConstants.USB_DIR_OUT,
+                    0x01,  // Vendor OUT
                     0x0b, 0, 2, dummy, 0, 500);
                 if (r < 0) {
                     Log.e(TAG, "Stop interface 2 retry also failed: " + r);
@@ -156,7 +157,7 @@ public class FlirOneDriver {
             // Step 2: Stop interface 1 FILEIO
             Log.d(TAG, "Sending stop command to interface 1...");
             r = connection.controlTransfer(
-                UsbConstants.USB_TYPE_VENDOR | UsbConstants.USB_DIR_OUT,
+                0x01,  // bRequestType: Vendor OUT
                 0x0b,  // bRequest
                 0,     // wValue (stop)
                 1,     // wIndex (interface 1)
@@ -174,7 +175,7 @@ public class FlirOneDriver {
             // Step 3: Start interface 1 FILEIO
             Log.d(TAG, "Sending start command to interface 1...");
             r = connection.controlTransfer(
-                UsbConstants.USB_TYPE_VENDOR | UsbConstants.USB_DIR_OUT,
+                0x01,  // bRequestType: Vendor OUT
                 0x0b,  // bRequest
                 1,     // wValue (start)
                 1,     // wIndex (interface 1)
@@ -198,7 +199,7 @@ public class FlirOneDriver {
             // Step 4: Start video stream (simplified - no data)
             Log.d(TAG, "Sending start command to interface 2 (video)...");
             r = connection.controlTransfer(
-                UsbConstants.USB_TYPE_VENDOR | UsbConstants.USB_DIR_OUT,
+                0x01,  // bRequestType: Vendor OUT
                 0x0b,  // bRequest
                 1,     // wValue (start)
                 2,     // wIndex (interface 2)
@@ -216,7 +217,9 @@ public class FlirOneDriver {
             // Wait for stream to stabilize
             Thread.sleep(500);
 
-            if (DEBUG) Log.d(TAG, "Camera initialized successfully");
+            // Even if control transfers fail, try to proceed
+            // The camera might already be in the right state
+            Log.d(TAG, "Camera initialization complete (ignoring control transfer errors)");
             return true;
 
         } catch (Exception e) {
@@ -226,31 +229,55 @@ public class FlirOneDriver {
     }
 
     private void sendConfigCommands() {
+        Log.d(TAG, "sendConfigCommands: epControlOut=" + epControlOut + ", epControlIn=" + epControlIn);
         if (epControlOut == null) {
             Log.e(TAG, "Control OUT endpoint not found");
             return;
         }
 
+        // Try a simple test first - just read from EP 0x81
+        byte[] testRead = new byte[512];
+        int test = connection.bulkTransfer(epControlIn, testRead, testRead.length, 100);
+        Log.d(TAG, "Test read from 0x81: " + test + " bytes");
+
         // Send CameraFiles.zip request (required for initialization)
         // Header 1
         byte[] header1 = hexStringToByteArray("cc0100000100000041000000F8B3F700");
-        connection.bulkTransfer(epControlOut, header1, header1.length, 100);
+        int ret = connection.bulkTransfer(epControlOut, header1, header1.length, 100);
+        Log.d(TAG, "Header1 sent: " + ret + " bytes (error means USB not ready)");
 
         // JSON 1
         String json1 = "{\"type\":\"openFile\",\"data\":{\"mode\":\"r\",\"path\":\"CameraFiles.zip\"}}";
         byte[] json1Bytes = json1.getBytes();
-        connection.bulkTransfer(epControlOut, json1Bytes, json1Bytes.length, 100);
+        ret = connection.bulkTransfer(epControlOut, json1Bytes, json1Bytes.length, 100);
+        Log.d(TAG, "JSON1 sent: " + ret + " bytes");
 
         // Header 2
         byte[] header2 = hexStringToByteArray("cc0100000100000033000000efdbc1c1");
-        connection.bulkTransfer(epControlOut, header2, header2.length, 100);
+        ret = connection.bulkTransfer(epControlOut, header2, header2.length, 100);
+        Log.d(TAG, "Header2 sent: " + ret + " bytes");
 
         // JSON 2
         String json2 = "{\"type\":\"readFile\",\"data\":{\"streamIdentifier\":10}}";
         byte[] json2Bytes = json2.getBytes();
-        connection.bulkTransfer(epControlOut, json2Bytes, json2Bytes.length, 100);
+        ret = connection.bulkTransfer(epControlOut, json2Bytes, json2Bytes.length, 100);
+        Log.d(TAG, "JSON2 sent: " + ret + " bytes");
 
         if (DEBUG) Log.d(TAG, "Sent CameraFiles.zip request");
+
+        // Read response from EP 0x81 (like the C test does)
+        if (epControlIn != null) {
+            byte[] response = new byte[65536];
+            int resp = connection.bulkTransfer(epControlIn, response, response.length, 500);
+            if (resp > 0) {
+                Log.d(TAG, "Got " + resp + " bytes response from EP 0x81");
+                // Check for battery JSON response
+                if (resp > 16 && response[16] == '{') {
+                    String json = new String(response, 16, Math.min(resp - 16, 200));
+                    Log.d(TAG, "Response JSON: " + json);
+                }
+            }
+        }
     }
 
     public void startStream(FrameCallback callback) {
@@ -270,6 +297,9 @@ public class FlirOneDriver {
         byte[] buffer = new byte[16384]; // 16KB chunks
         byte[] statusBuffer = new byte[512];
         int timeoutCount = 0;
+        int framesReceived = 0;
+
+        Log.d(TAG, "Stream loop starting, epVideo=" + epVideo);
 
         while (isStreaming) {
             if (epVideo == null) {
@@ -277,15 +307,20 @@ public class FlirOneDriver {
                 break;
             }
 
-            // Read from video endpoint
-            int bytesRead = connection.bulkTransfer(epVideo, buffer, buffer.length, 1000);
+            // Read from video endpoint with longer timeout
+            int bytesRead = connection.bulkTransfer(epVideo, buffer, buffer.length, 2000);
 
             if (bytesRead > 0) {
+                Log.d(TAG, "Got " + bytesRead + " bytes from video endpoint");
                 processVideoData(buffer, bytesRead);
                 timeoutCount = 0;
+                framesReceived++;
             } else {
                 // On timeout, poll status endpoints to keep connection alive
                 timeoutCount++;
+                if (timeoutCount % 10 == 0) {
+                    Log.d(TAG, "Timeout " + timeoutCount + ", frames=" + framesReceived);
+                }
 
                 // Poll EP 0x81
                 if (epControlIn != null) {
