@@ -55,6 +55,11 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-project.txt'
         }
     }
+
+    packagingOptions {
+        // Exclude vector drawable that causes AAPT errors with API 19
+        excludes += ['**/drawable-v21/star.xml']
+    }
 }
 
 dependencies {
