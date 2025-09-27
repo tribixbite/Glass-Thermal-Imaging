@@ -196,15 +196,16 @@ public class FlirOneDriver {
             // Wait for initialization
             Thread.sleep(200);
 
-            // Step 4: Start video stream (simplified - no data)
+            // Step 4: Start video stream - ROS driver sends 2 bytes {0,0}
             Log.d(TAG, "Sending start command to interface 2 (video)...");
+            byte[] startData = new byte[]{0, 0};  // ROS driver sends this
             r = connection.controlTransfer(
                 0x01,  // bRequestType: Vendor OUT
                 0x0b,  // bRequest
                 1,     // wValue (start)
                 2,     // wIndex (interface 2)
-                null,  // No data - critical for Glass
-                0,     // length = 0
+                startData,  // 2 bytes of zeros like ROS driver
+                2,     // length = 2
                 500    // timeout
             );
             if (r < 0) {
@@ -230,8 +231,13 @@ public class FlirOneDriver {
 
     private void sendConfigCommands() {
         Log.d(TAG, "sendConfigCommands: epControlOut=" + epControlOut + ", epControlIn=" + epControlIn);
+        Log.d(TAG, "Connection valid: " + (connection != null));
         if (epControlOut == null) {
             Log.e(TAG, "Control OUT endpoint not found");
+            return;
+        }
+        if (connection == null) {
+            Log.e(TAG, "USB connection is null!");
             return;
         }
 

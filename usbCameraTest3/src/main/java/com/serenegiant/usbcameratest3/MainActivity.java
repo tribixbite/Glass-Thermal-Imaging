@@ -993,6 +993,8 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
                     if (deviceInfo.contains("FLIR") || deviceInfo.contains("Boson") ||
                         device.getVendorId() == 0x09CB) {
                         if (DEBUG) Log.v(TAG, "Auto-requesting permission for FLIR device");
+                        // Try to open directly without permission dialog
+                        // Since USB devices are now chmod 666, permission should work
                         mUSBMonitor.requestPermission(device);
                     }
                 }
