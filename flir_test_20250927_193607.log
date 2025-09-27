@@ -1,0 +1,48 @@
+FLIR ONE Test - Sat Sep 27 19:36:07 EDT 2025
+==============================
+FLIR ONE USB Test Tool
+======================
+
+Opening device: /dev/bus/usb/001/016
+
+Claiming interfaces...
+Interface 0: OK
+Interface 1: OK
+Interface 2: OK
+Waiting for device to stabilize...
+
+Setting alternate interfaces...
+Interface 1 alt 0: 0
+Attempting to switch to high bandwidth mode (Alt 1)...
+Interface 2 alt 1: SUCCESS
+
+Sending init commands...
+Stop interface 2 FRAME: 0
+Stop interface 1 FILEIO: 0
+Start interface 1 FILEIO: 0
+
+Sending CameraFiles.zip request (required for init)...
+Header1 sent: 16 bytes
+JSON1 sent: 65 bytes - {"type":"openFile","data":{"mode":"r","path":"CameraFiles.zip"}}
+Header2 sent: 16 bytes
+JSON2 sent: 51 bytes - {"type":"readFile","data":{"streamIdentifier":10}}
+
+Reading initial status from EP 0x81...
+
+Starting video stream (final command)...
+Video start command: -1
+
+Reading frames from EP 0x85...
+Continuously reading to keep stream alive...
+Read error: No such device
+
+Total frames captured: 0
+
+
+Checking other endpoints for diagnostics...
+
+Reading from EP 0x81 (status)...
+
+Reading from EP 0x83...
+
+Releasing interfaces...
