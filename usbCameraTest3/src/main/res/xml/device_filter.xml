@@ -24,5 +24,12 @@
   -->
 
 <usb>
-	<usb-device class="239" subclass="2" />	<!-- all device of UVC -->
+	<!-- FLIR Boson thermal cameras (primary target) -->
+	<usb-device vendor-id="2507" />	<!-- FLIR vendor ID 0x09CB -->
+
+	<!-- Generic UVC devices as fallback -->
+	<usb-device class="239" subclass="2" />	<!-- all UVC devices -->
+
+	<!-- Alternative FLIR vendor IDs observed in field -->
+	<usb-device vendor-id="1240" />	<!-- Alternative FLIR ID 0x04D8 -->
 </usb>

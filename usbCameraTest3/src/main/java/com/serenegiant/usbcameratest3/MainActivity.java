@@ -97,6 +97,10 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
     private Surface mPreviewSurface;
     private boolean mIsRecording = false;
 
+    // USB power management for Glass constraints
+    private USBPowerManager mUSBPowerManager;
+    private USBPowerManager.PowerState mCurrentPowerState = USBPowerManager.PowerState.UNKNOWN;
+
     // Glass UI components
     private ImageView mThermalOverlay;
     private GestureDetector mGestureDetector;
@@ -194,6 +198,27 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
 
     private void initializeCamera() {
         mUSBMonitor = new USBMonitor(this, mOnDeviceConnectListener);
+
+        // Initialize USB power management for Glass constraints
+        mUSBPowerManager = new USBPowerManager(this);
+        mUSBPowerManager.setListener(new USBPowerManager.PowerStateListener() {
+            @Override
+            public void onPowerStateChanged(USBPowerManager.PowerState state, String details) {
+                mCurrentPowerState = state;
+                handlePowerStateChange(state, details);
+            }
+
+            @Override
+            public void onBatteryLevelChanged(int level, boolean charging) {
+                handleBatteryLevelChange(level, charging);
+            }
+
+            @Override
+            public void onPowerWarning(String warning) {
+                showToast(warning);
+                if (DEBUG) Log.w(TAG, "Power warning: " + warning);
+            }
+        });
     }
 
     private void initializeLocationServices() {
@@ -305,6 +330,10 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         if (mThermalProcessingExecutor != null) {
             mThermalProcessingExecutor.shutdown();
             mThermalProcessingExecutor = null;
+        }
+        if (mUSBPowerManager != null) {
+            mUSBPowerManager.cleanup();
+            mUSBPowerManager = null;
         }
         super.onDestroy();
     }
@@ -853,11 +882,28 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         @Override
         public void onAttach(final UsbDevice device) {
             if (DEBUG) Log.v(TAG, "onAttach:" + device);
+
+            // Analyze USB power requirements for this device
+            final USBPowerManager.PowerState powerState = mUSBPowerManager.analyzeUsbDevicePower(device);
+
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    Toast.makeText(MainActivity.this, "FLIR Boson detected", Toast.LENGTH_SHORT).show();
-                    updateStatusText("FLIR Boson Connected");
+                    String deviceInfo = getDeviceInfo(device);
+                    String message = String.format("USB Device: %s", deviceInfo);
+
+                    // Show different messages based on power state
+                    if (powerState == USBPowerManager.PowerState.INSUFFICIENT_POWER) {
+                        message = "⚠️ Device detected - May need external power";
+                        updateStatusText("USB Device - Power Warning");
+                    } else if (deviceInfo.contains("FLIR") || deviceInfo.contains("Boson")) {
+                        message = "✅ FLIR Boson detected";
+                        updateStatusText("FLIR Boson Connected");
+                    } else {
+                        updateStatusText("USB Camera Connected");
+                    }
+
+                    Toast.makeText(MainActivity.this, message, Toast.LENGTH_SHORT).show();
                 }
             });
         }
@@ -913,15 +959,49 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
         @Override
         public void onDisconnect(final UsbDevice device, final USBMonitor.UsbControlBlock ctrlBlock) {
             if (DEBUG) Log.v(TAG, "onDisconnect:" + device);
+
+            // Handle graceful camera disconnection
             synchronized (mSync) {
                 if (mUVCCamera != null && device.equals(mUVCCamera.getDevice())) {
+                    // Stop any ongoing recording
+                    if (mIsRecording) {
+                        mIsRecording = false;
+                        if (DEBUG) Log.i(TAG, "Recording stopped due to USB disconnection");
+                    }
+
+                    // Clear thermal data
+                    synchronized (mThermalLock) {
+                        mLatestThermalFrame = null;
+                        mRawDataEnabled = false;
+                    }
+
                     releaseCamera();
                 }
             }
+
+            // Reset power state
+            mCurrentPowerState = USBPowerManager.PowerState.UNKNOWN;
+
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    updateStatusText("FLIR Boson Disconnected");
+                    String deviceInfo = getDeviceInfo(device);
+                    String message;
+
+                    if (deviceInfo.contains("FLIR") || deviceInfo.contains("Boson")) {
+                        message = "FLIR Boson Disconnected";
+                        updateStatusText("❌ FLIR Boson Disconnected");
+                    } else {
+                        message = "USB Camera Disconnected";
+                        updateStatusText("❌ USB Device Disconnected");
+                    }
+
+                    showToast(message);
+
+                    // Clear thermal overlay
+                    if (mThermalOverlay != null) {
+                        mThermalOverlay.setVisibility(View.GONE);
+                    }
                 }
             });
         }
@@ -974,5 +1054,60 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
     @Override
     public void onDialogResult(boolean canceled) {
         if (DEBUG) Log.v(TAG, "onDialogResult:canceled=" + canceled);
+    }
+
+    // USB Power Management callbacks
+    private void handlePowerStateChange(USBPowerManager.PowerState state, String details) {
+        if (DEBUG) Log.v(TAG, "Power state changed: " + state + " - " + details);
+
+        switch (state) {
+            case INSUFFICIENT_POWER:
+                updateStatusText("⚠️ Low USB Power - External power recommended");
+                break;
+            case BATTERY_ONLY:
+                updateStatusText("🔋 Battery Mode - Limited operation time");
+                break;
+            case EXTERNAL_POWER:
+                updateStatusText("🔌 External Power - Optimal operation");
+                break;
+            case OPTIMAL_POWER:
+                updateStatusText("✅ Adequate Power - Normal operation");
+                break;
+            default:
+                updateStatusText("Glass Thermal Imaging Ready");
+                break;
+        }
+    }
+
+    private void handleBatteryLevelChange(int level, boolean charging) {
+        if (DEBUG) Log.v(TAG, String.format("Battery: %d%%, Charging: %s", level, charging));
+
+        // Update status with battery info during operation
+        if (mUVCCamera != null && level < 20 && !charging) {
+            showToast("⚠️ Low battery: " + level + "% - Consider connecting power");
+        }
+    }
+
+    private String getDeviceInfo(UsbDevice device) {
+        if (device == null) return "Unknown Device";
+
+        String deviceName = device.getDeviceName();
+        if (deviceName == null) deviceName = "USB Device";
+
+        return String.format("%s (VID:0x%04X PID:0x%04X)",
+            deviceName, device.getVendorId(), device.getProductId());
+    }
+
+    private void showToast(final String message) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (mToast != null) {
+                    mToast.cancel();
+                }
+                mToast = Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG);
+                mToast.show();
+            }
+        });
     }
 }
