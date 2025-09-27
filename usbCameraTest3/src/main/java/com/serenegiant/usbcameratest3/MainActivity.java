@@ -94,7 +94,7 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
     // USB camera components
     private USBMonitor mUSBMonitor;
     private UVCCamera mUVCCamera;
-    private FlirOneDriverV2 mFlirOneDriver; // FLIR ONE specific driver V2 (clean implementation)
+    private FlirOneDriverV3 mFlirOneDriver; // FLIR ONE specific driver V3 (sequential implementation)
     private UVCCameraTextureView mUVCCameraView;
     private Surface mPreviewSurface;
     private boolean mIsRecording = false;
@@ -1006,31 +1006,26 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
             if (DEBUG) Log.v(TAG, "onConnect:" + device);
 
             // Check if this is a FLIR ONE device
-            if (FlirOneDriverV2.isFlirOneDevice(device)) {
+            if (FlirOneDriverV3.isFlirOneDevice(device)) {
                 // Use FLIR ONE specific driver
                 synchronized (mSync) {
                     releaseCamera();
                     try {
-                        mFlirOneDriver = new FlirOneDriverV2(device);
+                        mFlirOneDriver = new FlirOneDriverV3(device);
                         if (mFlirOneDriver.open(ctrlBlock.getConnection())) {
                             if (DEBUG) Log.i(TAG, "FLIR ONE driver opened successfully");
 
                             // Start streaming with callback
-                            mFlirOneDriver.startStream(new FlirOneDriverV2.FrameCallback() {
+                            mFlirOneDriver.startStream(new FlirOneDriverV3.FrameCallback() {
                                 @Override
                                 public void onThermalFrame(byte[] thermalData, int width, int height) {
                                     processThermalFrame(thermalData, width, height);
                                 }
 
                                 @Override
-                                public void onVisibleFrame(byte[] jpegData) {
+                                public void onJpegFrame(byte[] jpegData) {
                                     // Process visible light image if needed
-                                    if (DEBUG) Log.d(TAG, "Received visible frame: " + jpegData.length + " bytes");
-                                }
-
-                                @Override
-                                public void onError(String error) {
-                                    Log.e(TAG, "FLIR ONE error: " + error);
+                                    if (DEBUG) Log.d(TAG, "Received JPEG frame: " + jpegData.length + " bytes");
                                 }
                             });
 
