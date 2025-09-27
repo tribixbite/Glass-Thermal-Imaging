@@ -141,20 +141,47 @@ These tasks optimize the app for Glass's limited hardware resources.
     - Triggers on device attachment when VID is 0x09CB
     - Should enable automatic camera stream initialization
 
+- [x] **Fix Missing MenuActivity:**
+    - TAP gesture disabled to prevent crashes
+    - App no longer crashes on gesture interactions
+
+- [x] **Build and Deploy Updated APK:**
+    - Built APK with FLIR ONE support and auto-permission request
+    - Deployed to Glass successfully
+    - Disabled USB auto-launch to prevent re-attachment loops
+
+- [x] **USB Re-attachment Loop Resolution:**
+    - Identified resource conflict causing device cycling
+    - Disabled USB_DEVICE_ATTACHED intent filter
+    - Manual app launch now possible without auto-restart loop
+
+### Critical Breakthrough - FLIR ONE Protocol Implementation
+- [x] **FLIR ONE is NOT a UVC Device:**
+    - Uses vendor-specific protocol (not standard UVC)
+    - Requires custom driver implementation based on ROS flir_one_node
+    - Created FlirOneDriverV2.java with proper state machine
+
+- [x] **Successful USB Interface Claiming:**
+    - C test program successfully claims all interfaces
+    - Sends initialization commands successfully
+    - Configuration 3 set correctly via sysfs
+    - Protocol error occurs during frame capture (expected, needs refinement)
+
 ### Next Steps to Complete
-- [ ] **Build and Deploy Updated APK:**
-    - Build APK with FLIR ONE support and auto-permission request
-    - Test USB permission grant flow on Glass
-    - Verify camera stream initialization after permission granted
+- [ ] **Debug Protocol Error in Frame Capture:**
+    - Protocol error when reading from EP 0x85
+    - May need additional initialization or timing adjustments
+    - Review ROS driver for exact frame reading sequence
 
-- [ ] **Fix Missing MenuActivity:**
-    - TAP gesture currently crashes app due to missing MenuActivity
-    - Either implement MenuActivity or disable TAP gesture temporarily
+- [ ] **Integrate Working C Code into Android App:**
+    - Port successful C USB operations to Java/JNI
+    - Bypass Android USB framework limitations
+    - Implement direct USB access via native code
 
-- [ ] **Verify Video Stream Access:**
-    - Check if UVC camera opens after permission granted
-    - Monitor for video frame callbacks
-    - Verify thermal data is being received and processed
+- [ ] **Verify Thermal Data Stream:**
+    - Confirm thermal frames are being received
+    - Process 16-bit raw thermal data (160x120)
+    - Display thermal feed on Glass screen
 
 ## Phase 4: Advanced Features & Optimization
 

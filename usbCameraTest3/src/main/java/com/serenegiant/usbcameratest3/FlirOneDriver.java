@@ -14,7 +14,7 @@ public class FlirOneDriver {
     private static final String TAG = "FlirOneDriver";
     private static final boolean DEBUG = true;
 
-    // FLIR ONE USB IDs
+    // FLIR ONE USB IDs (already correct based on previous analysis)
     private static final int VENDOR_ID = 0x09CB;
     private static final int PRODUCT_ID = 0x1996;
 
@@ -22,7 +22,7 @@ public class FlirOneDriver {
     private static final int EP_VIDEO = 0x85;      // Video frames bulk IN
     private static final int EP_CONTROL_IN = 0x81;  // Control bulk IN
     private static final int EP_CONTROL_OUT = 0x02; // Control bulk OUT
-    private static final int EP_STATUS = 0x83;     // Status bulk IN
+    private static final int EP_STATUS = 0x83;      // Status bulk IN
 
     // Magic bytes for frame start
     private static final byte[] MAGIC_BYTES = {(byte)0xEF, (byte)0xBE, 0x00, 0x00};
@@ -51,56 +51,76 @@ public class FlirOneDriver {
         this.device = device;
     }
 
+    /**
+     * Attempts to open and claim interfaces on the FLIR ONE.
+     * @param connection The UsbDeviceConnection
+     * @return true if successful, false otherwise.
+     */
     public boolean open(UsbDeviceConnection connection) {
         this.connection = connection;
 
         Log.d(TAG, "Opening FLIR ONE with " + device.getInterfaceCount() + " interfaces");
 
-        // FLIR ONE shows 5 interfaces on Glass (0-4)
-        // Interface 0,2,4 have the endpoints we need
         int numInterfaces = device.getInterfaceCount();
         interfaces = new UsbInterface[numInterfaces];
 
-        // Claim all interfaces and find the ones with endpoints
-        for (int i = 0; i < numInterfaces; i++) {
-            interfaces[i] = device.getInterface(i);
-            Log.d(TAG, "Interface " + i + " ID=" + interfaces[i].getId() +
-                     " endpoints=" + interfaces[i].getEndpointCount());
+        boolean claimedAnyInterface = false;
 
-            // Only claim interfaces with endpoints
-            if (interfaces[i].getEndpointCount() > 0) {
-                boolean claimed = connection.claimInterface(interfaces[i], true);
-                Log.d(TAG, "Interface " + i + " claimed: " + claimed);
+        // Iterate through all interfaces to find and claim them
+        for (int i = 0; i < numInterfaces; i++) {
+            UsbInterface iface = device.getInterface(i);
+            
+            // Only claim interfaces that have endpoints
+            if (iface.getEndpointCount() > 0) {
+                // Try with force flag first
+                boolean claimed = connection.claimInterface(iface, true);
+                
                 if (!claimed) {
-                    // Try without force flag
-                    claimed = connection.claimInterface(interfaces[i], false);
-                    Log.d(TAG, "Interface " + i + " retry claimed: " + claimed);
+                    // If that fails, try without the force flag
+                    claimed = connection.claimInterface(iface, false);
+                }
+
+                if (claimed) {
+                    Log.d(TAG, "Interface " + i + " ID=" + iface.getId() + " claimed successfully.");
+                    interfaces[i] = iface;
+                    claimedAnyInterface = true;
+                } else {
+                    Log.w(TAG, "Interface " + i + " ID=" + iface.getId() + " failed to claim.");
                 }
             } else {
                 Log.d(TAG, "Interface " + i + " skipped (no endpoints)");
             }
         }
 
-        // Find endpoints
+        if (!claimedAnyInterface) {
+            Log.e(TAG, "Failed to claim any interfaces. Cannot continue.");
+            return false;
+        }
+
+        // Find endpoints on the interfaces we successfully claimed
         findEndpoints();
 
-        // Initialize camera
+        if (epVideo == null || epControlIn == null || epControlOut == null || epStatus == null) {
+            Log.e(TAG, "Failed to find all required endpoints. Cannot continue.");
+            return false;
+        }
+
         return initializeCamera();
     }
 
     private void findEndpoints() {
-        // Find all endpoints across available interfaces
-        for (int j = 0; j < interfaces.length; j++) {
-            UsbInterface iface = interfaces[j];
+        // Find all endpoints across successfully claimed interfaces
+        for (UsbInterface iface : interfaces) {
             if (iface == null) continue;
 
             // Check endpoints
             for (int i = 0; i < iface.getEndpointCount(); i++) {
                 UsbEndpoint ep = iface.getEndpoint(i);
                 int addr = ep.getAddress();
+                int direction = ep.getDirection();
 
-                Log.d(TAG, String.format("Found endpoint: 0x%02X on interface %d",
-                          addr & 0xFF, iface.getId()));
+                Log.d(TAG, String.format("Found endpoint: 0x%02X (dir %d) on interface %d",
+                        addr & 0xFF, direction, iface.getId()));
 
                 if (addr == EP_CONTROL_IN) {
                     epControlIn = ep;
@@ -116,33 +136,41 @@ public class FlirOneDriver {
 
         if (DEBUG) {
             Log.d(TAG, "Endpoints found - Control IN: " + (epControlIn != null) +
-                      ", Control OUT: " + (epControlOut != null) +
-                      ", Video: " + (epVideo != null) +
-                      ", Status: " + (epStatus != null));
+                    ", Control OUT: " + (epControlOut != null) +
+                    ", Video: " + (epVideo != null) +
+                    ", Status: " + (epStatus != null));
         }
     }
 
     private boolean initializeCamera() {
         try {
-            // Wait a moment after claiming interfaces
+            // Wait for interfaces to settle
             Thread.sleep(100);
 
-            // MINIMAL INIT FOR GLASS: Skip control transfers since Glass kernel doesn't support them
-            // Just try to send the config commands via bulk transfer
-            Log.d(TAG, "GLASS MODE: Skipping control transfers, trying direct config...");
+            // Per the log, SET_CONFIGURATION fails. We cannot rely on that.
+            // Instead, we perform a minimal initialization using only bulk transfers.
+            Log.d(TAG, "Attempting minimal initialization on Google Glass...");
 
-            // Send minimal config via bulk transfers
-            sendConfigCommands();
-
-            // Wait for initialization
-            Thread.sleep(500);
-
-            // Try to read something to wake up the camera
-            if (epVideo != null) {
-                byte[] testBuf = new byte[512];
-                int test = connection.bulkTransfer(epVideo, testBuf, testBuf.length, 100);
-                Log.d(TAG, "Test read from video EP: " + test + " bytes");
+            // Try to perform a bulk transfer to each endpoint. This often "wakes up"
+            // the device and gets it into a receptive state.
+            byte[] testBuf = new byte[512];
+            if (epControlOut != null) {
+                int test = connection.bulkTransfer(epControlOut, testBuf, 0, 100);
+                Log.d(TAG, "Test write to EP 0x02: " + test + " bytes");
             }
+
+            if (epControlIn != null) {
+                int test = connection.bulkTransfer(epControlIn, testBuf, testBuf.length, 100);
+                Log.d(TAG, "Test read from EP 0x81: " + test + " bytes");
+            }
+            
+            if (epStatus != null) {
+                int test = connection.bulkTransfer(epStatus, testBuf, testBuf.length, 100);
+                Log.d(TAG, "Test read from EP 0x83: " + test + " bytes");
+            }
+
+            // Wait for device to start streaming
+            Thread.sleep(500);
 
             Log.d(TAG, "Camera initialization complete (Glass minimal mode)");
             return true;
@@ -150,33 +178,6 @@ public class FlirOneDriver {
         } catch (Exception e) {
             Log.e(TAG, "Error initializing camera", e);
             return false;
-        }
-    }
-
-    private void sendConfigCommands() {
-        Log.d(TAG, "GLASS MODE: Attempting minimal config...");
-
-        // Since bulk transfers fail on Glass, let's skip the config entirely
-        // The FLIR might work without it
-        Log.d(TAG, "Skipping CameraFiles.zip request on Glass");
-
-        // Just try to poll the endpoints to see if anything works
-        if (epControlIn != null) {
-            byte[] testBuf = new byte[512];
-            int test = connection.bulkTransfer(epControlIn, testBuf, testBuf.length, 10);
-            Log.d(TAG, "EP 0x81 test: " + test);
-        }
-
-        if (epStatus != null) {
-            byte[] testBuf = new byte[512];
-            int test = connection.bulkTransfer(epStatus, testBuf, testBuf.length, 10);
-            Log.d(TAG, "EP 0x83 test: " + test);
-        }
-
-        if (epVideo != null) {
-            byte[] testBuf = new byte[512];
-            int test = connection.bulkTransfer(epVideo, testBuf, testBuf.length, 10);
-            Log.d(TAG, "EP 0x85 test: " + test);
         }
     }
 
@@ -220,24 +221,20 @@ public class FlirOneDriver {
                 if (timeoutCount % 10 == 0) {
                     Log.d(TAG, "Timeout " + timeoutCount + ", frames=" + framesReceived);
                 }
+            } else {
+                Log.w(TAG, "Bulk transfer returned " + bytesRead);
             }
 
             // ALWAYS poll EP 0x81 and 0x83 regardless of success - this is key!
             // ROS driver does this after every iteration
             if (epControlIn != null) {
-                int ret = connection.bulkTransfer(epControlIn, statusBuffer, statusBuffer.length, 10);
-                if (ret > 0 && DEBUG) {
-                    Log.d(TAG, "EP 0x81: " + ret + " bytes");
-                }
+                connection.bulkTransfer(epControlIn, statusBuffer, statusBuffer.length, 10);
             }
 
             if (epStatus != null) {
-                int ret = connection.bulkTransfer(epStatus, statusBuffer, statusBuffer.length, 10);
-                if (ret > 0 && DEBUG) {
-                    Log.d(TAG, "EP 0x83: " + ret + " bytes");
-                }
+                connection.bulkTransfer(epStatus, statusBuffer, statusBuffer.length, 10);
             }
-
+            
             // Break if too many timeouts
             if (timeoutCount > 100) {
                 Log.e(TAG, "Too many timeouts, stopping stream");
@@ -249,12 +246,13 @@ public class FlirOneDriver {
     }
 
     private void processVideoData(byte[] data, int length) {
+        // ... (remaining code is correct, no changes needed) ...
         // Check for magic bytes at start of new frame
         if (length >= 4 &&
-            data[0] == MAGIC_BYTES[0] &&
-            data[1] == MAGIC_BYTES[1] &&
-            data[2] == MAGIC_BYTES[2] &&
-            data[3] == MAGIC_BYTES[3]) {
+                data[0] == MAGIC_BYTES[0] &&
+                data[1] == MAGIC_BYTES[1] &&
+                data[2] == MAGIC_BYTES[2] &&
+                data[3] == MAGIC_BYTES[3]) {
             // New frame starts, reset buffer
             frameBufferPos = 0;
         }
@@ -312,9 +310,9 @@ public class FlirOneDriver {
 
     private int getInt32(byte[] buffer, int offset) {
         return (buffer[offset] & 0xFF) |
-               ((buffer[offset + 1] & 0xFF) << 8) |
-               ((buffer[offset + 2] & 0xFF) << 16) |
-               ((buffer[offset + 3] & 0xFF) << 24);
+                ((buffer[offset + 1] & 0xFF) << 8) |
+                ((buffer[offset + 2] & 0xFF) << 16) |
+                ((buffer[offset + 3] & 0xFF) << 24);
     }
 
     private byte[] hexStringToByteArray(String s) {
@@ -322,7 +320,7 @@ public class FlirOneDriver {
         byte[] data = new byte[len / 2];
         for (int i = 0; i < len; i += 2) {
             data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
-                                 + Character.digit(s.charAt(i+1), 16));
+                    + Character.digit(s.charAt(i+1), 16));
         }
         return data;
     }

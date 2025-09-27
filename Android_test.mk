@@ -12,5 +12,5 @@ include $(BUILD_EXECUTABLE)
 
 include $(CLEAR_VARS)
 LOCAL_MODULE := usb1.0
-LOCAL_SRC_FILES := libuvccamera/src/main/obj/local/armeabi-v7a/libusb100.a
+LOCAL_SRC_FILES := libuvccamera/src/main/obj/local/armeabi-v7a/libusb100_static.a
 include $(PREBUILT_STATIC_LIBRARY)
