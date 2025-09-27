@@ -39,7 +39,7 @@ import com.serenegiant.encoder.MediaEncoder;
 import com.serenegiant.encoder.MediaVideoEncoder;
 import com.serenegiant.glutils.EGLBase;
 import com.serenegiant.glutils.GLDrawer2D;
-import com.serenegiant.glutils.es1.GLHelper;
+import android.opengl.GLES11;
 
 /**
  * change the view size with keeping the specified aspect ratio.
@@ -598,7 +598,7 @@ public class UVCCameraTextureView extends TextureView	// API >= 14
 	    			mPreviewSurface = null;
 	    		}
 	            if (mTexId >= 0) {
-	            	GLHelper.deleteTex(mTexId);
+	            	GLES11.glDeleteTextures(1, new int[]{mTexId}, 0);
 	            	mTexId = -1;
 	            }
 	    		if (mEglSurface != null) {
