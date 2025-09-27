@@ -149,11 +149,11 @@ int main(int argc, char *argv[]) {
     ret = ioctl(fd, USBDEVFS_SETINTERFACE, &setif);
     printf("Interface 1 alt 0: %d\n", ret);
 
-    // Interface 2: alt 0 has endpoints, alt 1 has none
+    // Interface 2: alt 1 for video streaming (high bandwidth mode)
     setif.interface = 2;
-    setif.altsetting = 0;  // Use Alt 0 which has EP 0x85/0x06
+    setif.altsetting = 1;  // Use Alt 1 for video streaming
     ret = ioctl(fd, USBDEVFS_SETINTERFACE, &setif);
-    printf("Interface 2 alt 0: %d\n", ret);
+    printf("Interface 2 alt 1: %d\n", ret);
 
     // Send initialization commands (following ROS driver sequence)
     printf("\nSending init commands...\n");
