@@ -27,14 +27,14 @@ public class FlirOneDriver {
     // Magic bytes for frame start
     private static final byte[] MAGIC_BYTES = {(byte)0xEF, (byte)0xBE, 0x00, 0x00};
 
-    // Frame buffer (1MB like ROS driver)
-    private static final int FRAME_BUFFER_SIZE = 1024 * 1024; // 1MB buffer
+    // Frame buffer - smaller size for Glass compatibility
+    private static final int FRAME_BUFFER_SIZE = 512 * 1024; // 512KB buffer
     private byte[] frameBuffer = new byte[FRAME_BUFFER_SIZE];
     private int frameBufferPos = 0;
 
     private UsbDevice device;
     private UsbDeviceConnection connection;
-    private UsbInterface[] interfaces;
+    private UsbInterface iface0, iface1, iface2;
     private UsbEndpoint epVideo, epControlIn, epControlOut, epStatus;
 
     private boolean isStreaming = false;
@@ -52,133 +52,281 @@ public class FlirOneDriver {
     }
 
     /**
-     * Attempts to open and claim interfaces on the FLIR ONE.
-     * @param connection The UsbDeviceConnection
-     * @return true if successful, false otherwise.
+     * Opens and initializes the FLIR ONE using the proven sequence from C code
      */
     public boolean open(UsbDeviceConnection connection) {
         this.connection = connection;
+        Log.d(TAG, "Opening FLIR ONE...");
 
-        Log.d(TAG, "Opening FLIR ONE with " + device.getInterfaceCount() + " interfaces");
-
-        int numInterfaces = device.getInterfaceCount();
-        interfaces = new UsbInterface[numInterfaces];
-
-        boolean claimedAnyInterface = false;
-
-        // Iterate through all interfaces to find and claim them
-        for (int i = 0; i < numInterfaces; i++) {
-            UsbInterface iface = device.getInterface(i);
-            
-            // Only claim interfaces that have endpoints
-            if (iface.getEndpointCount() > 0) {
-                // Try with force flag first
-                boolean claimed = connection.claimInterface(iface, true);
-                
-                if (!claimed) {
-                    // If that fails, try without the force flag
-                    claimed = connection.claimInterface(iface, false);
-                }
-
-                if (claimed) {
-                    Log.d(TAG, "Interface " + i + " ID=" + iface.getId() + " claimed successfully.");
-                    interfaces[i] = iface;
-                    claimedAnyInterface = true;
-                } else {
-                    Log.w(TAG, "Interface " + i + " ID=" + iface.getId() + " failed to claim.");
-                }
-            } else {
-                Log.d(TAG, "Interface " + i + " skipped (no endpoints)");
-            }
-        }
-
-        if (!claimedAnyInterface) {
-            Log.e(TAG, "Failed to claim any interfaces. Cannot continue.");
+        // Step 1: Claim interfaces 0, 1, 2 with delays (proven to work)
+        if (!claimInterfaces()) {
+            Log.e(TAG, "Failed to claim interfaces");
             return false;
         }
 
-        // Find endpoints on the interfaces we successfully claimed
-        findEndpoints();
-
-        if (epVideo == null || epControlIn == null || epControlOut == null || epStatus == null) {
-            Log.e(TAG, "Failed to find all required endpoints. Cannot continue.");
+        // Step 2: Find endpoints
+        if (!findEndpoints()) {
+            Log.e(TAG, "Failed to find endpoints");
             return false;
         }
 
-        return initializeCamera();
+        // Step 3: Set alternate interfaces for streaming
+        if (!setAlternateInterfaces()) {
+            Log.e(TAG, "Failed to set alternate interfaces");
+            return false;
+        }
+
+        // Step 4: Initialize camera with sequential commands
+        if (!initializeCamera()) {
+            Log.e(TAG, "Failed to initialize camera");
+            return false;
+        }
+
+        Log.i(TAG, "FLIR ONE opened successfully");
+        return true;
     }
 
-    private void findEndpoints() {
-        // Find all endpoints across successfully claimed interfaces
-        for (UsbInterface iface : interfaces) {
-            if (iface == null) continue;
+    private boolean claimInterfaces() {
+        try {
+            // Only claim the 3 interfaces we need
+            iface0 = device.getInterface(0);
+            iface1 = device.getInterface(1);
+            iface2 = device.getInterface(2);
 
-            // Check endpoints
+            boolean claimed0 = connection.claimInterface(iface0, true);
+            Thread.sleep(50); // Delay between claims
+
+            boolean claimed1 = connection.claimInterface(iface1, true);
+            Thread.sleep(50);
+
+            boolean claimed2 = connection.claimInterface(iface2, true);
+            Thread.sleep(200); // Stabilization delay
+
+            Log.d(TAG, "Interface claiming: 0=" + claimed0 + " 1=" + claimed1 + " 2=" + claimed2);
+            return claimed0 && claimed1 && claimed2;
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error claiming interfaces", e);
+            return false;
+        }
+    }
+
+    private boolean findEndpoints() {
+        // Search interfaces for the endpoints we need
+        for (int j = 0; j < 3; j++) {
+            UsbInterface iface = device.getInterface(j);
+
             for (int i = 0; i < iface.getEndpointCount(); i++) {
                 UsbEndpoint ep = iface.getEndpoint(i);
                 int addr = ep.getAddress();
-                int direction = ep.getDirection();
-
-                Log.d(TAG, String.format("Found endpoint: 0x%02X (dir %d) on interface %d",
-                        addr & 0xFF, direction, iface.getId()));
 
                 if (addr == EP_CONTROL_IN) {
                     epControlIn = ep;
+                    Log.d(TAG, "Found EP 0x81 on interface " + j);
                 } else if (addr == EP_CONTROL_OUT) {
                     epControlOut = ep;
+                    Log.d(TAG, "Found EP 0x02 on interface " + j);
                 } else if (addr == EP_STATUS) {
                     epStatus = ep;
+                    Log.d(TAG, "Found EP 0x83 on interface " + j);
                 } else if (addr == EP_VIDEO) {
                     epVideo = ep;
+                    Log.d(TAG, "Found EP 0x85 on interface " + j);
                 }
             }
         }
 
-        if (DEBUG) {
-            Log.d(TAG, "Endpoints found - Control IN: " + (epControlIn != null) +
-                    ", Control OUT: " + (epControlOut != null) +
-                    ", Video: " + (epVideo != null) +
-                    ", Status: " + (epStatus != null));
+        return epControlIn != null && epControlOut != null &&
+               epStatus != null && epVideo != null;
+    }
+
+    private boolean setAlternateInterfaces() {
+        try {
+            // Set interface 1 to alt 0, interface 2 to alt 1 for video streaming
+            // Using control transfers as Android doesn't have direct setInterface
+
+            // Set interface 1 to alt 0
+            int result1 = connection.controlTransfer(
+                0x01,  // bmRequestType: Interface
+                0x0B,  // bRequest: SET_INTERFACE
+                0,     // wValue: alternate setting 0
+                1,     // wIndex: interface 1
+                null,  // no data
+                0,     // length
+                500    // timeout
+            );
+            Log.d(TAG, "Interface 1 alt 0: " + (result1 >= 0 ? "SUCCESS" : "FAILED"));
+            Thread.sleep(100);
+
+            // Set interface 2 to alt 0 first
+            int result2 = connection.controlTransfer(
+                0x01,  // bmRequestType: Interface
+                0x0B,  // bRequest: SET_INTERFACE
+                0,     // wValue: alternate setting 0
+                2,     // wIndex: interface 2
+                null,  // no data
+                0,     // length
+                500    // timeout
+            );
+            Log.d(TAG, "Interface 2 alt 0: " + (result2 >= 0 ? "SUCCESS" : "FAILED"));
+            Thread.sleep(100);
+
+            // CRITICAL: Set interface 2 to alt 1 for high bandwidth video streaming
+            Log.d(TAG, "Switching to high bandwidth mode...");
+            int result = connection.controlTransfer(
+                0x01,  // bmRequestType: Interface
+                0x0B,  // bRequest: SET_INTERFACE
+                1,     // wValue: alternate setting 1 - THIS IS THE KEY!
+                2,     // wIndex: interface 2
+                null,  // no data
+                0,     // length
+                1000   // timeout
+            );
+
+            if (result >= 0) {
+                Log.d(TAG, "Interface 2 alt 1: SUCCESS");
+                Thread.sleep(200); // Stabilization
+                return true;
+            } else {
+                Log.w(TAG, "Alt 1 failed, continuing with alt 0");
+                return true; // Continue with alt 0
+            }
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error setting alternates", e);
+            return false;
         }
     }
 
     private boolean initializeCamera() {
         try {
-            // Wait for interfaces to settle
+            Log.d(TAG, "Initializing camera with full sequence...");
+
+            // Step 1: Stop interface 2 FRAME
+            int result = connection.controlTransfer(
+                0x01,  // bmRequestType
+                0x0B,  // bRequest
+                0,     // wValue: stop
+                2,     // wIndex: interface 2
+                null,  // no data
+                0,
+                500
+            );
+            Log.d(TAG, "Stop interface 2 FRAME: " + result);
+            Thread.sleep(50);
+
+            // Step 2: Stop interface 1 FILEIO
+            result = connection.controlTransfer(
+                0x01,  // bmRequestType
+                0x0B,  // bRequest
+                0,     // wValue: stop
+                1,     // wIndex: interface 1
+                null,
+                0,
+                500
+            );
+            Log.d(TAG, "Stop interface 1 FILEIO: " + result);
+            Thread.sleep(50);
+
+            // Step 3: Start interface 1 FILEIO
+            result = connection.controlTransfer(
+                0x01,  // bmRequestType
+                0x0B,  // bRequest
+                1,     // wValue: start
+                1,     // wIndex: interface 1
+                null,
+                0,
+                500
+            );
+            Log.d(TAG, "Start interface 1 FILEIO: " + result);
             Thread.sleep(100);
 
-            // Per the log, SET_CONFIGURATION fails. We cannot rely on that.
-            // Instead, we perform a minimal initialization using only bulk transfers.
-            Log.d(TAG, "Attempting minimal initialization on Google Glass...");
+            // Step 4: Send CameraFiles.zip request (REQUIRED by FLIR ONE protocol)
+            sendCameraFilesRequest();
+            Thread.sleep(100);
 
-            // Try to perform a bulk transfer to each endpoint. This often "wakes up"
-            // the device and gets it into a receptive state.
-            byte[] testBuf = new byte[512];
-            if (epControlOut != null) {
-                int test = connection.bulkTransfer(epControlOut, testBuf, 0, 100);
-                Log.d(TAG, "Test write to EP 0x02: " + test + " bytes");
-            }
+            // Step 5: Read initial status to clear buffers
+            readInitialStatus();
+            Thread.sleep(100);
 
-            if (epControlIn != null) {
-                int test = connection.bulkTransfer(epControlIn, testBuf, testBuf.length, 100);
-                Log.d(TAG, "Test read from EP 0x81: " + test + " bytes");
-            }
-            
-            if (epStatus != null) {
-                int test = connection.bulkTransfer(epStatus, testBuf, testBuf.length, 100);
-                Log.d(TAG, "Test read from EP 0x83: " + test + " bytes");
-            }
+            // Step 6: Start video stream on interface 2
+            result = connection.controlTransfer(
+                0x01,  // bmRequestType
+                0x0B,  // bRequest
+                1,     // wValue: start
+                2,     // wIndex: interface 2
+                null,
+                0,
+                500
+            );
+            Log.d(TAG, "Start video stream: " + result);
+            Thread.sleep(200);
 
-            // Wait for device to start streaming
-            Thread.sleep(500);
-
-            Log.d(TAG, "Camera initialization complete (Glass minimal mode)");
-            return true;
+            return result >= 0;
 
         } catch (Exception e) {
             Log.e(TAG, "Error initializing camera", e);
             return false;
         }
+    }
+
+    private void sendCameraFilesRequest() {
+        try {
+            // These headers and JSON are from the proven ROS driver
+            // Header 1
+            byte[] header1 = hexStringToByteArray("cc0100000100000041000000F8B3F700");
+            int ret = connection.bulkTransfer(epControlOut, header1, header1.length, 500);
+            Log.d(TAG, "Header1 sent: " + ret + " bytes");
+
+            // JSON 1
+            String json1 = "{\"type\":\"openFile\",\"data\":{\"mode\":\"r\",\"path\":\"CameraFiles.zip\"}}";
+            byte[] json1Bytes = (json1 + "\0").getBytes();
+            ret = connection.bulkTransfer(epControlOut, json1Bytes, json1Bytes.length, 500);
+            Log.d(TAG, "JSON1 sent: " + ret + " bytes");
+
+            // Header 2
+            byte[] header2 = hexStringToByteArray("cc0100000100000033000000efdbc1c1");
+            ret = connection.bulkTransfer(epControlOut, header2, header2.length, 500);
+            Log.d(TAG, "Header2 sent: " + ret + " bytes");
+
+            // JSON 2
+            String json2 = "{\"type\":\"readFile\",\"data\":{\"streamIdentifier\":10}}";
+            byte[] json2Bytes = (json2 + "\0").getBytes();
+            ret = connection.bulkTransfer(epControlOut, json2Bytes, json2Bytes.length, 500);
+            Log.d(TAG, "JSON2 sent: " + ret + " bytes");
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error sending CameraFiles request", e);
+        }
+    }
+
+    private void readInitialStatus() {
+        byte[] buffer = new byte[1024];
+
+        // Read status from EP 0x81 a few times to clear buffer
+        for (int i = 0; i < 5; i++) {
+            int len = connection.bulkTransfer(epControlIn, buffer, buffer.length, 500);
+            if (len > 0) {
+                Log.d(TAG, "Status read " + (i+1) + ": " + len + " bytes");
+                // Check for JSON response
+                if (len > 16 && buffer[16] == '{') {
+                    String json = new String(buffer, 16, Math.min(len - 16, 100));
+                    Log.d(TAG, "JSON: " + json);
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    private byte[] hexStringToByteArray(String s) {
+        int len = s.length();
+        byte[] data = new byte[len / 2];
+        for (int i = 0; i < len; i += 2) {
+            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
+                                 + Character.digit(s.charAt(i+1), 16));
+        }
+        return data;
     }
 
     public void startStream(FrameCallback callback) {
@@ -195,7 +343,8 @@ public class FlirOneDriver {
     }
 
     private void streamLoop() {
-        byte[] buffer = new byte[16384]; // 16KB chunks
+        // CRITICAL: Use 4KB buffer - smaller size that works on Glass's kernel
+        byte[] buffer = new byte[4096]; // 4KB chunks - multiple of 512
         byte[] statusBuffer = new byte[512];
         int timeoutCount = 0;
         int framesReceived = 0;
@@ -315,15 +464,6 @@ public class FlirOneDriver {
                 ((buffer[offset + 3] & 0xFF) << 24);
     }
 
-    private byte[] hexStringToByteArray(String s) {
-        int len = s.length();
-        byte[] data = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
-                    + Character.digit(s.charAt(i+1), 16));
-        }
-        return data;
-    }
 
     public void stopStream() {
         isStreaming = false;
@@ -339,12 +479,10 @@ public class FlirOneDriver {
     public void close() {
         stopStream();
 
-        if (connection != null && interfaces != null) {
-            for (UsbInterface iface : interfaces) {
-                if (iface != null) {
-                    connection.releaseInterface(iface);
-                }
-            }
+        if (connection != null) {
+            if (iface0 != null) connection.releaseInterface(iface0);
+            if (iface1 != null) connection.releaseInterface(iface1);
+            if (iface2 != null) connection.releaseInterface(iface2);
         }
     }
 
