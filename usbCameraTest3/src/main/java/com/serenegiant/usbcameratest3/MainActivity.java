@@ -38,6 +38,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.util.Log;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.View;
@@ -171,6 +172,17 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
     }
 
     @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        // Add back button support for exiting
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (DEBUG) Log.v(TAG, "Back button pressed: Exit");
+            finish();
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+    @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == MENU_REQUEST_CODE && resultCode == RESULT_OK && data != null) {
             mThermalMode = data.getBooleanExtra(MenuActivity.EXTRA_THERMAL_MODE, mThermalMode);
@@ -260,8 +272,10 @@ public final class MainActivity extends Activity implements CameraDialog.CameraD
             @Override
             public boolean onGesture(Gesture gesture) {
                 if (gesture == Gesture.TAP) {
-                    if (DEBUG) Log.v(TAG, "TAP: Open settings menu");
-                    openOptionsMenu();
+                    if (DEBUG) Log.v(TAG, "TAP: Disabled (MenuActivity not ready)");
+                    // Disabled until MenuActivity is implemented
+                    // openOptionsMenu();
+                    Toast.makeText(MainActivity.this, "Settings not available yet", Toast.LENGTH_SHORT).show();
                     return true;
                 } else if (gesture == Gesture.TWO_TAP) {
                     if (DEBUG) Log.v(TAG, "TWO_TAP: Take picture");
