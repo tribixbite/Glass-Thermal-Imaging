@@ -90,31 +90,16 @@ jobs:
         $ANDROID_NDK_HOME/ndk-build APP_ABI="armeabi-v7a" APP_PLATFORM=android-19
         cd ../../../..
 
-    - name: Fix vector drawable compatibility issue
+    - name: Clear Gradle cache and verify library versions
       run: |
-        # Wait for Gradle cache to be populated, then fix vector drawable
-        ./gradlew :usbCameraTest3:processDebugResources --continue || true
+        # Clear any cached dependencies that might have wrong versions
+        rm -rf ~/.gradle/caches/
 
-        # Find and fix the problematic star.xml file
-        STAR_FILE=$(find ~/.gradle/caches -name "star.xml" -path "*/common-1.3.0/res/drawable-v21/*" 2>/dev/null | head -1)
-        if [ -n "$STAR_FILE" ] && [ -f "$STAR_FILE" ]; then
-          echo "Fixing vector drawable at: $STAR_FILE"
-          cat > "$STAR_FILE" << 'EOF'
-        <?xml version="1.0" encoding="utf-8"?>
-        <!-- Converted to shape for API 19 compatibility -->
-        <shape xmlns:android="http://schemas.android.com/apk/res/android">
-            <solid android:color="#FFFFFF"/>
-            <size android:width="48dp" android:height="48dp"/>
-        </shape>
-        EOF
-          echo "✅ Fixed vector drawable for API 19 compatibility"
+        # Check what version is configured
+        echo "Gradle file common library version:"
+        grep "common:" libuvccamera/build.gradle || echo "No common library found in gradle file"
 
-          # Clean processed resources to force regeneration with fixed file
-          ./gradlew clean
-          echo "✅ Cleaned cache to use fixed drawable"
-        else
-          echo "⚠️ Star.xml not found in cache"
-        fi
+        echo "✅ Cleared Gradle cache and verified common library version"
 
     - name: Build debug APK
       run: |
