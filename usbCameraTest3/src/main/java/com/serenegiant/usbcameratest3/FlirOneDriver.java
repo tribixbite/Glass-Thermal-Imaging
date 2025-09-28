@@ -88,19 +88,32 @@ public class FlirOneDriver {
 
     private boolean claimInterfaces() {
         try {
-            // Only claim the 3 interfaces we need
             iface0 = device.getInterface(0);
             iface1 = device.getInterface(1);
             iface2 = device.getInterface(2);
 
-            boolean claimed0 = connection.claimInterface(iface0, true);
-            Thread.sleep(50); // Delay between claims
+            boolean claimed0 = false, claimed1 = false, claimed2 = false;
 
-            boolean claimed1 = connection.claimInterface(iface1, true);
-            Thread.sleep(50);
+            for (int i = 0; i < 3; i++) {
+                claimed0 = connection.claimInterface(iface0, true);
+                if (claimed0) break;
+                Thread.sleep(100);
+            }
+            Thread.sleep(100);
 
-            boolean claimed2 = connection.claimInterface(iface2, true);
-            Thread.sleep(200); // Stabilization delay
+            for (int i = 0; i < 3; i++) {
+                claimed1 = connection.claimInterface(iface1, true);
+                if (claimed1) break;
+                Thread.sleep(100);
+            }
+            Thread.sleep(100);
+
+            for (int i = 0; i < 3; i++) {
+                claimed2 = connection.claimInterface(iface2, true);
+                if (claimed2) break;
+                Thread.sleep(100);
+            }
+            Thread.sleep(200);
 
             Log.d(TAG, "Interface claiming: 0=" + claimed0 + " 1=" + claimed1 + " 2=" + claimed2);
             return claimed0 && claimed1 && claimed2;
@@ -112,85 +125,54 @@ public class FlirOneDriver {
     }
 
     private boolean findEndpoints() {
-        // Search interfaces for the endpoints we need
-        for (int j = 0; j < 3; j++) {
-            UsbInterface iface = device.getInterface(j);
+        for (int i = 0; i < 5; i++) {
+            // Search interfaces for the endpoints we need
+            for (int j = 0; j < 3; j++) {
+                UsbInterface iface = device.getInterface(j);
+                for (int k = 0; k < iface.getEndpointCount(); k++) {
+                    UsbEndpoint ep = iface.getEndpoint(k);
+                    int addr = ep.getAddress();
 
-            for (int i = 0; i < iface.getEndpointCount(); i++) {
-                UsbEndpoint ep = iface.getEndpoint(i);
-                int addr = ep.getAddress();
-
-                if (addr == EP_CONTROL_IN) {
-                    epControlIn = ep;
-                    Log.d(TAG, "Found EP 0x81 on interface " + j);
-                } else if (addr == EP_CONTROL_OUT) {
-                    epControlOut = ep;
-                    Log.d(TAG, "Found EP 0x02 on interface " + j);
-                } else if (addr == EP_STATUS) {
-                    epStatus = ep;
-                    Log.d(TAG, "Found EP 0x83 on interface " + j);
-                } else if (addr == EP_VIDEO) {
-                    epVideo = ep;
-                    Log.d(TAG, "Found EP 0x85 on interface " + j);
+                    if (addr == EP_CONTROL_IN) epControlIn = ep;
+                    else if (addr == EP_CONTROL_OUT) epControlOut = ep;
+                    else if (addr == EP_STATUS) epStatus = ep;
+                    else if (addr == EP_VIDEO) epVideo = ep;
                 }
+            }
+
+            if (epControlIn != null && epControlOut != null && epStatus != null && epVideo != null) {
+                Log.d(TAG, "Found all endpoints");
+                return true;
+            }
+
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                // Ignore
             }
         }
 
-        return epControlIn != null && epControlOut != null &&
-               epStatus != null && epVideo != null;
+        Log.e(TAG, "Could not find all endpoints");
+        return false;
     }
 
     private boolean setAlternateInterfaces() {
         try {
-            // Set interface 1 to alt 0, interface 2 to alt 1 for video streaming
-            // Using control transfers as Android doesn't have direct setInterface
-
             // Set interface 1 to alt 0
             int result1 = connection.controlTransfer(
-                0x01,  // bmRequestType: Interface
-                0x0B,  // bRequest: SET_INTERFACE
-                0,     // wValue: alternate setting 0
-                1,     // wIndex: interface 1
-                null,  // no data
-                0,     // length
-                500    // timeout
+                0x01, 0x0B, 0, 1, null, 0, 500
             );
             Log.d(TAG, "Interface 1 alt 0: " + (result1 >= 0 ? "SUCCESS" : "FAILED"));
             Thread.sleep(100);
 
-            // Set interface 2 to alt 0 first
+            // Set interface 2 to alt 0
             int result2 = connection.controlTransfer(
-                0x01,  // bmRequestType: Interface
-                0x0B,  // bRequest: SET_INTERFACE
-                0,     // wValue: alternate setting 0
-                2,     // wIndex: interface 2
-                null,  // no data
-                0,     // length
-                500    // timeout
+                0x01, 0x0B, 0, 2, null, 0, 500
             );
             Log.d(TAG, "Interface 2 alt 0: " + (result2 >= 0 ? "SUCCESS" : "FAILED"));
-            Thread.sleep(100);
+            Thread.sleep(200);
 
-            // CRITICAL: Set interface 2 to alt 1 for high bandwidth video streaming
-            Log.d(TAG, "Switching to high bandwidth mode...");
-            int result = connection.controlTransfer(
-                0x01,  // bmRequestType: Interface
-                0x0B,  // bRequest: SET_INTERFACE
-                1,     // wValue: alternate setting 1 - THIS IS THE KEY!
-                2,     // wIndex: interface 2
-                null,  // no data
-                0,     // length
-                1000   // timeout
-            );
-
-            if (result >= 0) {
-                Log.d(TAG, "Interface 2 alt 1: SUCCESS");
-                Thread.sleep(200); // Stabilization
-                return true;
-            } else {
-                Log.w(TAG, "Alt 1 failed, continuing with alt 0");
-                return true; // Continue with alt 0
-            }
+            return result2 >= 0;
 
         } catch (Exception e) {
             Log.e(TAG, "Error setting alternates", e);
